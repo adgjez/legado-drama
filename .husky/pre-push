@@ -1,0 +1,47 @@
+#!/usr/bin/env sh
+# ---------------------------------------------------------------
+# pre-push 门禁（git-guard）
+# 拦截两类危险推送（含远端分支删除）：
+#   1) 目标远端分支为受保护分支（main / master）
+#   2) non-fast-forward 推送（即 force push）
+# 逃生：git push --no-verify（不推荐，原因见 CLAUDE.md「AI 与危险 git 命令」）
+# ---------------------------------------------------------------
+
+remote="$1"
+protected_branches="main master"
+zero_sha="0000000000000000000000000000000000000000"
+
+blocked=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # 以远端目标分支为准：git push origin main、git push origin feature:main 都会被拦
+  target="${remote_ref#refs/heads/}"
+
+  # 1) 受保护分支：禁止推送与删除
+  for protected in $protected_branches; do
+    if [ "$target" = "$protected" ]; then
+      echo "[git-guard] ❌ 禁止直接推送/删除远端 ${target}（remote: ${remote}）" >&2
+      echo "[git-guard]    请推送特性分支并走 PR；确需操作请人工确认。" >&2
+      blocked=1
+    fi
+  done
+
+  # 删除远端分支：无 non-fast-forward 概念，跳过后续检查
+  [ "$local_ref" = "(delete)" ] && continue
+
+  # 2) non-fast-forward（force push）禁止
+  if [ "$remote_sha" != "$zero_sha" ] && [ "$local_sha" != "$zero_sha" ]; then
+    if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+      echo "[git-guard] ❌ 检测到 non-fast-forward 推送（force push）到 ${target}" >&2
+      echo "[git-guard]    请改用新分支，或人工确认后再推。" >&2
+      blocked=1
+    fi
+  fi
+done
+
+if [ "$blocked" -eq 1 ]; then
+  echo "[git-guard] 本次推送已被拦截。逃生：git push --no-verify（不推荐）。" >&2
+  exit 1
+fi
+
+exit 0

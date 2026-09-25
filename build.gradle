@@ -1,0 +1,63 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+
+buildscript {
+    ext {
+        compile_sdk_version = 37
+    }
+
+
+}
+
+plugins {
+    //id 'com.android.application' version "$agp_version" apply false
+    //id 'com.android.library' version "$agp_version" apply false
+    //id 'org.jetbrains.kotlin.android' version "$kotlin_version" apply false
+    //id 'com.google.devtools.ksp' version "$kotlin_version-$ksp_version" apply false
+    //id "de.undercouch.download" version "5.5.0" apply false
+    //id "com.google.gms.google-services" version "4.4.0" apply false
+
+    alias libs.plugins.android.application apply false
+    alias libs.plugins.android.library apply false
+    alias libs.plugins.kotlin.android apply false
+    alias libs.plugins.kotlin.parcelize apply false
+    alias libs.plugins.ksp apply false
+    alias libs.plugins.google.services apply false
+    alias libs.plugins.room apply false
+    // alias libs.plugins.hilt apply false
+    id 'com.google.dagger.hilt.android' version '2.59' apply false
+
+    alias libs.plugins.download apply false
+    // spotless 直接应用于根项目，配置块在下方（其余插件按模块各自应用）
+    alias libs.plugins.spotless
+}
+
+// ---------- Kotlin 格式门禁（spotless + ktlint） ----------
+// ratchetFrom 'origin/main'：只检查自 origin/main 以来的改动文件，存量代码不强制一次全合规。
+// 规则启停直接通过 editorConfigOverride 传给 ktlint 引擎（.editorconfig 文件在本工具链中不读取）。
+// 本地修正：./gradlew spotlessApply；CI 校验：./gradlew spotlessCheck（见 .github/workflows/lint.yaml）。
+spotless {
+    ratchetFrom 'origin/main'
+
+    kotlin {
+        target '**/*.kt'
+        targetExclude '**/build/**'
+        ktlint().editorConfigOverride([
+            // 风格类规则与项目存量惯例冲突（不可自动修复），显式关闭：
+            'ktlint_standard_function-naming': 'disabled',          // Compose 组件函数惯用大写开头（fun WelcomeScreen()）
+            'ktlint_standard_property-naming': 'disabled',          // 常量属性混用驼峰（const val fileName）是项目惯例
+            'ktlint_standard_backing-property-naming': 'disabled',
+            'ktlint_standard_value-parameter-comment': 'disabled',  // 参数行内注释在存量代码中常见
+            'ktlint_standard_no-consecutive-comments': 'disabled',  // 注释块与语句之间加空行
+            'ktlint_standard_if-else-wrapping': 'disabled',         // if/else 分支内的注释位置
+            'ktlint_standard_import-ordering': 'disabled',          // 存量不按字母序导入，强制排序会使每次提交 diff 大量噪音
+            'ktlint_standard_no-wildcard-imports': 'disabled',      // Compose 包级导入（foundation.layout.*/material3.*）是项目惯例且不可自动修复
+            'max_line_length': 'off',                               // 存量存在超长行，先放开行宽检查
+        ])
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+}
+
+tasks.named('clean') {
+    delete rootProject.layout.buildDirectory
+}

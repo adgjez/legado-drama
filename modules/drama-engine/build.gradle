@@ -1,0 +1,26 @@
+plugins {
+    // kotlin-jvm 不带版本：kotlin-gradle-plugin 已由根 build.gradle 的 kotlin.android 别名带入 classpath（AGP9 内建 Kotlin）
+    id 'org.jetbrains.kotlin.jvm'
+    // serialization 插件首次声明，需带版本
+    alias libs.plugins.kotlin.serialization
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+kotlin {
+    jvmToolchain {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
+}
+
+dependencies {
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.serialization.json)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.turbine)
+}

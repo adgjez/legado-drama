@@ -1,0 +1,909 @@
+package io.legado.app.data.repository
+
+import io.legado.app.data.dao.BookReadTime
+import io.legado.app.data.dao.DailyReadStat
+import io.legado.app.data.dao.ReadRecordDao
+import io.legado.app.data.dao.SessionIdentity
+import io.legado.app.data.entities.readRecord.ReadRecord
+import io.legado.app.data.entities.readRecord.ReadRecordDetail
+import io.legado.app.data.entities.readRecord.ReadRecordSession
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Test
+import java.time.LocalDateTime
+import java.time.ZoneId
+
+/**
+ * 阅读记录 Repository 测试（构造注入 + 手写 Fake 模式，testing.md §16 固化的模板来源）。
+ *
+ * 质量评估（2026-08-27）：
+ * - 全项目写得最好的存量测试：用例都是真实业务场景（跨天会话拆分、导入合并、脏数据修复），
+ *   断言到字段级终态；四个新增 *ViewModelTest 均照此模式写。
+ * - 已知取舍：
+ *   1. 用 runBlocking 而非 runTest（testing.md §16.2 要求新测试用 runTest）；
+ *      当前被测逻辑纯同步无害，迁移期保留，随迭代清理。
+ *   2. FakeReadRecordDao（约 500 行）在内存里重实现了 Room 的 SQL 聚合语义，
+ *      存在 Fake 与真实 SQL「错得一致」的风险；聚合查询建议后续用
+ *      room-testing 内存库真 DAO 测试补一层。
+ *   3. Fake 内 SimpleDateFormat 未指定 Locale，跨环境有理论格式差异风险。
+ */
+class ReadRecordRepositoryTest {
+
+    @Test
+    fun importAggregateOnlyBackupKeepsReadTime() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+
+        repository.importRecords(
+            records = listOf(
+                ReadRecord(
+                    deviceId = "remote",
+                    bookName = "Test Book",
+                    bookAuthor = "Author",
+                    readTime = 3_600_000L,
+                    lastRead = 200L,
+                ),
+            ),
+        )
+
+        val record = dao.getReadRecord(CURRENT_DEVICE_ID, "Test Book", "Author")
+        assertNotNull(record)
+        assertEquals(3_600_000L, record?.readTime)
+        assertEquals(200L, record?.lastRead)
+    }
+
+    @Test
+    fun importDetailAndSessionRebuildsAggregateWhenMissing() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+
+        repository.importRecords(
+            records = emptyList(),
+            details = listOf(
+                ReadRecordDetail(
+                    deviceId = "remote",
+                    bookName = "Detail Book",
+                    bookAuthor = "Author",
+                    date = "2026-05-02",
+                    readTime = 90_000L,
+                    lastReadTime = 150L,
+                ),
+            ),
+            sessions = listOf(
+                ReadRecordSession(
+                    deviceId = "remote",
+                    bookName = "Detail Book",
+                    bookAuthor = "Author",
+                    startTime = 100L,
+                    endTime = 150L,
+                    words = 0L,
+                ),
+            ),
+        )
+
+        val record = dao.getReadRecord(CURRENT_DEVICE_ID, "Detail Book", "Author")
+        assertNotNull(record)
+        assertEquals(90_000L, record?.readTime)
+        assertEquals(150L, record?.lastRead)
+    }
+
+    @Test
+    fun mergeReadRecordIntoAccumulatesReadTime() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        val target = ReadRecord(CURRENT_DEVICE_ID, "Merge Book", "Author", 360_000_000L, 1_000L)
+        val source = ReadRecord("remote", "Merge Book", "Author", 60_000L, 1_100L)
+        dao.insert(target)
+        dao.insert(source)
+
+        repository.mergeReadRecordInto(target, listOf(source))
+
+        val record = dao.getReadRecord(CURRENT_DEVICE_ID, "Merge Book", "Author")
+        assertNotNull(record)
+        assertEquals(360_060_000L, record?.readTime)
+        assertEquals(1_100L, record?.lastRead)
+    }
+
+    @Test
+    fun repairRecordsMergesEmptyAuthorAndDuplicateDeviceRecords() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        dao.insert(
+            ReadRecord(deviceId = "remote", bookName = "Repair Book", bookAuthor = "", readTime = 60_000L, lastRead = 100L),
+            ReadRecord(deviceId = CURRENT_DEVICE_ID, bookName = "Repair Book", bookAuthor = "Author", readTime = 120_000L, lastRead = 200L),
+        )
+
+        repository.repairRecords { "Author" }
+
+        val record = dao.getReadRecord(CURRENT_DEVICE_ID, "Repair Book", "Author")
+        assertNotNull(record)
+        assertEquals(180_000L, record?.readTime)
+        assertEquals(200L, record?.lastRead)
+        assertEquals(1, dao.all.size)
+    }
+
+    @Test
+    fun saveReadSessionSplitsCrossDaySessionIntoDailyRecords() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        val zoneId = ZoneId.systemDefault()
+        val start = LocalDateTime.of(2026, 5, 2, 23, 50)
+            .atZone(zoneId)
+            .toInstant()
+            .toEpochMilli()
+        val end = LocalDateTime.of(2026, 5, 3, 0, 10)
+            .atZone(zoneId)
+            .toInstant()
+            .toEpochMilli()
+
+        repository.saveReadSession(
+            ReadRecordSession(
+                deviceId = CURRENT_DEVICE_ID,
+                bookName = "Night Book",
+                bookAuthor = "Author",
+                startTime = start,
+                endTime = end,
+                words = 0L,
+            ),
+        )
+
+        val record = dao.getReadRecord(CURRENT_DEVICE_ID, "Night Book", "Author")
+        assertNotNull(record)
+        assertEquals(1_200_000L, record?.readTime)
+        assertEquals(end, record?.lastRead)
+
+        val details = dao.getDetailsByBook(CURRENT_DEVICE_ID, "Night Book", "Author")
+            .sortedBy { it.date }
+        assertEquals(2, details.size)
+        assertEquals("2026-05-02", details[0].date)
+        assertEquals(600_000L, details[0].readTime)
+        assertEquals("2026-05-03", details[1].date)
+        assertEquals(600_000L, details[1].readTime)
+
+        val sessions = dao.getSessionsByBook(CURRENT_DEVICE_ID, "Night Book", "Author")
+            .sortedBy { it.startTime }
+        assertEquals(2, sessions.size)
+        assertEquals(start, sessions[0].startTime)
+        assertEquals(600_000L, sessions[0].endTime - sessions[0].startTime)
+        assertEquals(600_000L, sessions[1].endTime - sessions[1].startTime)
+        assertEquals(end, sessions[1].endTime)
+    }
+
+    @Test
+    fun getBookTimelineDaysMergesSameDayFragments() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        // 翻页高频上报产生的首尾相接碎片
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Fragment Book", bookAuthor = "Author", startTime = 1_000L, endTime = 30_000L, words = 100L, durChapterTitle = "第一章"),
+        )
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Fragment Book", bookAuthor = "Author", startTime = 30_000L, endTime = 45_000L, words = 50L, durChapterTitle = "第二章"),
+        )
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Fragment Book", bookAuthor = "Author", startTime = 45_000L, endTime = 60_000L, words = 20L, durChapterTitle = "第三章"),
+        )
+
+        val days = repository.getBookTimelineDays("Fragment Book", "Author").first()
+
+        assertEquals(1, days.size)
+        assertEquals(1, days[0].sessions.size)
+        assertEquals(1_000L, days[0].sessions[0].session.startTime)
+        assertEquals(60_000L, days[0].sessions[0].session.endTime)
+        assertEquals(170L, days[0].sessions[0].session.words)
+        // 合并后的会话应显示最后读到的章节，而不是开始阅读的章节
+        assertEquals("第三章", days[0].sessions[0].session.durChapterTitle)
+        // readTime 按未合并的原始会话求和（29s + 15s + 15s），行时长与日合计一致
+        assertEquals(59_000L, days[0].readTime)
+        assertEquals(59_000L, days[0].sessions[0].readTime)
+    }
+
+    @Test
+    fun getBookTimelineDaysMergesSessionsWithinTwentyMinutes() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        val zoneId = ZoneId.systemDefault()
+        val day = LocalDateTime.of(2026, 5, 2, 10, 0).atZone(zoneId).toInstant().toEpochMilli()
+        // 间隔 6 分钟：小于时间线视图的 20 分钟阈值，应合并
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Gap Book", bookAuthor = "Author", startTime = day, endTime = day + 60_000L, words = 0L),
+        )
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Gap Book", bookAuthor = "Author", startTime = day + 60_000L + 6 * 60 * 1000L, endTime = day + 60_000L + 6 * 60 * 1000L + 30_000L, words = 0L),
+        )
+
+        val days = repository.getBookTimelineDays("Gap Book", "Author").first()
+
+        assertEquals(1, days.size)
+        assertEquals(1, days[0].sessions.size)
+        // 日合计与行时长都必须用真实阅读时长（60s + 30s = 90s），
+        // 而非合并后时段的端点跨度（6 分钟间隙会被计入，虚高为 420s）
+        assertEquals(90_000L, days[0].readTime)
+        assertEquals(90_000L, days[0].sessions[0].readTime)
+    }
+
+    @Test
+    fun getBookTimelineDaysKeepsSessionsBeyondTwentyMinutes() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        val zoneId = ZoneId.systemDefault()
+        val day = LocalDateTime.of(2026, 5, 2, 10, 0).atZone(zoneId).toInstant().toEpochMilli()
+        // 间隔 25 分钟：超过阈值，保持两条
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Gap Book", bookAuthor = "Author", startTime = day, endTime = day + 60_000L, words = 0L),
+        )
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Gap Book", bookAuthor = "Author", startTime = day + 60_000L + 25 * 60 * 1000L, endTime = day + 60_000L + 25 * 60 * 1000L + 30_000L, words = 0L),
+        )
+
+        val days = repository.getBookTimelineDays("Gap Book", "Author").first()
+
+        assertEquals(1, days.size)
+        assertEquals(2, days[0].sessions.size)
+        // 不合并时行时长即真实时长，行时长之和等于日合计（行按时间降序排列）
+        assertEquals(30_000L, days[0].sessions[0].readTime)
+        assertEquals(60_000L, days[0].sessions[1].readTime)
+        assertEquals(90_000L, days[0].readTime)
+    }
+
+    @Test
+    fun getBookTimelineDaysDoesNotMergeAcrossDays() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        val zoneId = ZoneId.systemDefault()
+        val dayOneStart = LocalDateTime.of(2026, 5, 2, 23, 58).atZone(zoneId).toInstant().toEpochMilli()
+        val dayOneEnd = LocalDateTime.of(2026, 5, 2, 23, 59).atZone(zoneId).toInstant().toEpochMilli()
+        val dayTwoStart = LocalDateTime.of(2026, 5, 3, 0, 0).atZone(zoneId).toInstant().toEpochMilli()
+        val dayTwoEnd = LocalDateTime.of(2026, 5, 3, 0, 2).atZone(zoneId).toInstant().toEpochMilli()
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Midnight Book", bookAuthor = "Author", startTime = dayOneStart, endTime = dayOneEnd, words = 0L),
+        )
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Midnight Book", bookAuthor = "Author", startTime = dayTwoStart, endTime = dayTwoEnd, words = 0L),
+        )
+
+        val days = repository.getBookTimelineDays("Midnight Book", "Author").first()
+
+        // 各归各天，不合并到前一天（日统计按天归属）
+        assertEquals(2, days.size)
+        assertEquals("2026-05-03", days[0].date)
+        assertEquals(1, days[0].sessions.size)
+        assertEquals("2026-05-02", days[1].date)
+        assertEquals(1, days[1].sessions.size)
+    }
+
+    @Test
+    fun compactSessionsMergesContiguousFragmentsAndKeepsTotalTime() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        // 翻页碎片：首尾相接，应被压缩合并
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Compact Book", bookAuthor = "Author", startTime = 1_000L, endTime = 30_000L, words = 100L, durChapterTitle = "第一章")
+        )
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Compact Book", bookAuthor = "Author", startTime = 30_000L, endTime = 45_000L, words = 50L, durChapterTitle = "第二章")
+        )
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Compact Book", bookAuthor = "Author", startTime = 45_000L, endTime = 60_000L, words = 20L, durChapterTitle = "第三章")
+        )
+        // 与上一段间隔 10 分钟（> 0），属于独立阅读时段，不应被压缩合并
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Compact Book", bookAuthor = "Author", startTime = 60_000L + 10 * 60_000L, endTime = 60_000L + 10 * 60_000L + 30_000L, words = 0L, durChapterTitle = "第四章")
+        )
+
+        repository.compactSessions()
+
+        val remaining = dao.getSessionsByBook(CURRENT_DEVICE_ID, "Compact Book", "Author").sortedBy { it.startTime }
+        assertEquals(2, remaining.size)
+        assertEquals(1_000L, remaining[0].startTime)
+        assertEquals(60_000L, remaining[0].endTime)
+        assertEquals(170L, remaining[0].words)
+        assertEquals("第三章", remaining[0].durChapterTitle)
+        // 合并前后总时长不变（29s + 15s + 15s + 30s）
+        assertEquals(89_000L, remaining.sumOf { it.endTime - it.startTime })
+    }
+
+    @Test
+    fun compactSessionsDoesNotTouchOtherBooks() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Book A", bookAuthor = "Author", startTime = 1_000L, endTime = 30_000L)
+        )
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Book B", bookAuthor = "Author", startTime = 30_000L, endTime = 45_000L)
+        )
+
+        repository.compactSessions()
+
+        // 不同书籍之间即使时间上首尾相接也不能合并
+        assertEquals(1, dao.getSessionsByBook(CURRENT_DEVICE_ID, "Book A", "Author").size)
+        assertEquals(1, dao.getSessionsByBook(CURRENT_DEVICE_ID, "Book B", "Author").size)
+    }
+
+    @Test
+    fun compactSessionsHandlesFragmentCountsBeyondSqlVariableLimit() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        // 老用户单本书碎片可达数万条：删除被吸收碎片必须分批（旧 SQLite IN 子句上限 999），
+        // 否则抛 too many SQL variables 导致阅读记录页崩溃
+        repeat(1200) { i ->
+            dao.insertSession(
+                ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Bulk Book", bookAuthor = "Author", startTime = i * 1000L, endTime = (i + 1) * 1000L, words = 0L, durChapterTitle = "第${i}章")
+            )
+        }
+
+        repository.compactSessions()
+
+        val remaining = dao.getSessionsByBook(CURRENT_DEVICE_ID, "Bulk Book", "Author")
+        assertEquals(1, remaining.size)
+        assertEquals(0L, remaining[0].startTime)
+        assertEquals(1_200_000L, remaining[0].endTime)
+    }
+
+    @Test
+    fun saveReadSessionIgnoresBlankBookName() = runBlocking {        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+
+        repository.saveReadSession(
+            ReadRecordSession(
+                deviceId = CURRENT_DEVICE_ID,
+                bookName = "   ",
+                bookAuthor = "",
+                startTime = 100L,
+                endTime = 200L,
+                words = 0L,
+            ),
+        )
+
+        assertEquals(emptyList<ReadRecord>(), dao.all)
+        assertEquals(0, dao.getDetailsCount())
+        assertEquals(0, dao.getSessionsCount())
+    }
+
+    @Test
+    fun deleteReadRecordByDateRemovesOnlySelectedDayHistory() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        val zoneId = ZoneId.systemDefault()
+        val dayOneStart = LocalDateTime.of(2026, 5, 2, 10, 0)
+            .atZone(zoneId)
+            .toInstant()
+            .toEpochMilli()
+        val dayOneEnd = LocalDateTime.of(2026, 5, 2, 10, 1)
+            .atZone(zoneId)
+            .toInstant()
+            .toEpochMilli()
+        val dayTwoStart = LocalDateTime.of(2026, 5, 3, 10, 0)
+            .atZone(zoneId)
+            .toInstant()
+            .toEpochMilli()
+        val dayTwoEnd = LocalDateTime.of(2026, 5, 3, 10, 2)
+            .atZone(zoneId)
+            .toInstant()
+            .toEpochMilli()
+        val record = ReadRecord(CURRENT_DEVICE_ID, "Delete Book", "Author", 180_000L, dayTwoEnd)
+        dao.insert(record)
+        dao.insertDetail(
+            ReadRecordDetail(CURRENT_DEVICE_ID, "Delete Book", "Author", "2026-05-02", 60_000L, 0L, dayOneStart, dayOneEnd),
+        )
+        dao.insertDetail(
+            ReadRecordDetail(CURRENT_DEVICE_ID, "Delete Book", "Author", "2026-05-03", 120_000L, 0L, dayTwoStart, dayTwoEnd),
+        )
+        dao.insertSession(ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Delete Book", bookAuthor = "Author", startTime = dayOneStart, endTime = dayOneEnd, words = 0L))
+        dao.insertSession(ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Delete Book", bookAuthor = "Author", startTime = dayTwoStart, endTime = dayTwoEnd, words = 0L))
+
+        repository.deleteReadRecordByDate(record, "2026-05-02")
+
+        val remainingRecord = dao.getReadRecord(CURRENT_DEVICE_ID, "Delete Book", "Author")
+        assertNotNull(remainingRecord)
+        assertEquals(120_000L, remainingRecord?.readTime)
+        assertEquals(dayTwoEnd, remainingRecord?.lastRead)
+        assertEquals(listOf("2026-05-03"), dao.getDetailsByBook(CURRENT_DEVICE_ID, "Delete Book", "Author").map { it.date })
+        assertEquals(1, dao.getSessionsByBook(CURRENT_DEVICE_ID, "Delete Book", "Author").size)
+    }
+
+    @Test
+    fun getTotalReadTimePrefersDetailForBooksWithHistory() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        dao.insert(
+            ReadRecord(CURRENT_DEVICE_ID, "Dirty Book", "Author", 3_600_000L, 200L),
+            ReadRecord(CURRENT_DEVICE_ID, "Legacy Book", "Author", 300_000L, 150L),
+        )
+        dao.insertDetail(
+            ReadRecordDetail(CURRENT_DEVICE_ID, "Dirty Book", "Author", "2026-05-03", 120_000L, 0L, 100L, 200L),
+        )
+
+        val totalReadTime = repository.getTotalReadTime().first()
+
+        assertEquals(3_900_000L, totalReadTime)
+    }
+
+    @Test
+    fun repairRecordsPreservesExistingAggregateWhenHistoryIsPartial() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        dao.insert(ReadRecord(CURRENT_DEVICE_ID, "Rebuild Book", "Author", 3_600_000L, 500L))
+        dao.insertDetail(
+            ReadRecordDetail(CURRENT_DEVICE_ID, "Rebuild Book", "Author", "2026-05-03", 120_000L, 0L, 100L, 200L),
+        )
+        dao.insertSession(
+            ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "Rebuild Book", bookAuthor = "Author", startTime = 100L, endTime = 200L, words = 0L),
+        )
+
+        repository.repairRecords { "Author" }
+
+        val record = dao.getReadRecord(CURRENT_DEVICE_ID, "Rebuild Book", "Author")
+        assertNotNull(record)
+        assertEquals(3_600_000L, record?.readTime)
+        assertEquals(500L, record?.lastRead)
+    }
+
+    @Test
+    fun repairRecordsRemovesBlankBookNameHistory() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        dao.insert(ReadRecord(CURRENT_DEVICE_ID, "", "", 86_400_000L, 300L))
+        dao.insertDetail(ReadRecordDetail(CURRENT_DEVICE_ID, "", "", "2026-05-03", 86_400_000L, 0L, 100L, 300L))
+        dao.insertSession(ReadRecordSession(deviceId = CURRENT_DEVICE_ID, bookName = "", bookAuthor = "", startTime = 100L, endTime = 300L, words = 0L))
+
+        repository.repairRecords { null }
+
+        assertEquals(emptyList<ReadRecord>(), dao.all)
+        assertEquals(0, dao.getDetailsCount())
+        assertEquals(0, dao.getSessionsCount())
+    }
+
+    @Test
+    fun getRecordsWithDetailTimeKeepsLargerAggregateAndFillsMissingDetailTime() = runBlocking {
+        val dao = FakeReadRecordDao()
+        val repository = ReadRecordRepository(dao) { CURRENT_DEVICE_ID }
+        dao.insert(
+            ReadRecord(CURRENT_DEVICE_ID, "Book A", "Author", 3_600_000L, 500L),
+            ReadRecord(CURRENT_DEVICE_ID, "Book B", "Author", 0L, 200L),
+        )
+        dao.insertDetail(
+            ReadRecordDetail(CURRENT_DEVICE_ID, "Book A", "Author", "2026-05-03", 120_000L, 0L, 100L, 200L),
+        )
+        dao.insertDetail(
+            ReadRecordDetail(CURRENT_DEVICE_ID, "Book B", "Author", "2026-05-03", 180_000L, 0L, 100L, 200L),
+        )
+
+        val normalized = repository.getRecordsWithDetailTime("").first()
+
+        assertEquals(3_600_000L, normalized.first { it.bookName == "Book A" }.readTime)
+        assertEquals(180_000L, normalized.first { it.bookName == "Book B" }.readTime)
+    }
+
+    private class FakeReadRecordDao : ReadRecordDao {
+        private val records = mutableListOf<ReadRecord>()
+        private val details = mutableListOf<ReadRecordDetail>()
+        private val sessions = mutableListOf<ReadRecordSession>()
+        private var nextSessionId = 1L
+
+        override suspend fun insert(vararg readRecord: ReadRecord) {
+            readRecord.forEach { record ->
+                records.removeAll {
+                    it.deviceId == record.deviceId &&
+                        it.bookName == record.bookName &&
+                        it.bookAuthor == record.bookAuthor
+                }
+                records.add(record.copy())
+            }
+        }
+
+        override suspend fun insertAll(readRecords: List<ReadRecord>) {
+            insert(*readRecords.toTypedArray())
+        }
+
+        override suspend fun insertDetail(detail: ReadRecordDetail) {
+            details.removeAll {
+                it.deviceId == detail.deviceId &&
+                    it.bookName == detail.bookName &&
+                    it.bookAuthor == detail.bookAuthor &&
+                    it.date == detail.date
+            }
+            details.add(detail.copy())
+        }
+
+        override suspend fun insertAllDetails(details: List<ReadRecordDetail>) {
+            details.forEach { insertDetail(it) }
+        }
+
+        override suspend fun insertSession(session: ReadRecordSession) {
+            val stored = if (session.id == 0L) {
+                session.copy(id = nextSessionId++)
+            } else {
+                session
+            }
+            sessions.removeAll { it.id == stored.id }
+            sessions.add(stored)
+        }
+
+        override suspend fun insertAllSessions(sessions: List<ReadRecordSession>) {
+            sessions.forEach { insertSession(it) }
+        }
+
+        override suspend fun update(vararg record: ReadRecord) {
+            insert(*record)
+        }
+
+        override suspend fun updateSession(session: ReadRecordSession) {
+            sessions.removeAll { it.id == session.id }
+            sessions.add(session.copy())
+        }
+
+        override suspend fun delete(vararg record: ReadRecord) {
+            record.forEach { target ->
+                records.removeAll {
+                    it.deviceId == target.deviceId &&
+                        it.bookName == target.bookName &&
+                        it.bookAuthor == target.bookAuthor
+                }
+            }
+        }
+
+        override suspend fun deleteDetail(detail: ReadRecordDetail) {
+            details.removeAll {
+                it.deviceId == detail.deviceId &&
+                    it.bookName == detail.bookName &&
+                    it.bookAuthor == detail.bookAuthor &&
+                    it.date == detail.date
+            }
+        }
+
+        override suspend fun deleteSession(session: ReadRecordSession) {
+            sessions.removeAll { it.id == session.id }
+        }
+
+        override suspend fun clear() {
+            records.clear()
+        }
+
+        override suspend fun clearDetails() {
+            details.clear()
+        }
+
+        override suspend fun clearSessions() {
+            sessions.clear()
+        }
+
+        override suspend fun deleteByNameAndAuthor(bookName: String, bookAuthor: String) {
+            records.removeAll { it.bookName == bookName && it.bookAuthor == bookAuthor }
+        }
+
+        override suspend fun getReadRecord(deviceId: String, bookName: String, bookAuthor: String): ReadRecord? = records.firstOrNull {
+            it.deviceId == deviceId && it.bookName == bookName && it.bookAuthor == bookAuthor
+        }?.copy()
+
+        override suspend fun getReadRecordsByName(bookName: String): List<ReadRecord> = records.filter { it.bookName == bookName }.map { it.copy() }
+
+        override suspend fun getReadRecordsByNameExcludingTarget(
+            bookName: String,
+            excludeDeviceId: String,
+            excludeAuthor: String,
+        ): List<ReadRecord> = records.filter {
+            it.bookName == bookName && !(it.deviceId == excludeDeviceId && it.bookAuthor == excludeAuthor)
+        }.map { it.copy() }
+
+        override suspend fun getAllReadRecordsList(): List<ReadRecord> = records.map { it.copy() }
+
+        override fun getTotalReadTime(): Flow<Long?> = flowOf(records.sumOf { it.readTime })
+
+        override fun getCalculatedTotalReadTime(): Flow<Long> {
+            val detailSums = details.groupBy {
+                Triple(it.deviceId, it.bookName, it.bookAuthor)
+            }.mapValues { (_, grouped) -> grouped.sumOf { it.readTime } }
+            val total = records.sumOf { record ->
+                val key = Triple(record.deviceId, record.bookName, record.bookAuthor)
+                maxOf(record.readTime, detailSums[key] ?: 0L)
+            }
+            return flowOf(total)
+        }
+
+        override fun getReadTimeFlow(deviceId: String, bookName: String, bookAuthor: String): Flow<Long?> = flowOf(
+            records.firstOrNull {
+                it.deviceId == deviceId && it.bookName == bookName && it.bookAuthor == bookAuthor
+            }?.readTime,
+        )
+
+        override suspend fun getReadTime(deviceId: String, bookName: String, bookAuthor: String): Long? = getReadRecord(deviceId, bookName, bookAuthor)?.readTime
+
+        override fun getAllReadRecordsSortedByLastRead(): Flow<List<ReadRecord>> = flowOf(records.sortedByDescending { it.lastRead }.map { it.copy() })
+
+        override val count: Int
+            get() = records.size
+
+        override val all: List<ReadRecord>
+            get() = records.map { it.copy() }
+
+        override fun searchReadRecordsByLastRead(query: String): Flow<List<ReadRecord>> = flowOf(
+            records.filter { it.bookName.contains(query) || it.bookAuthor.contains(query) }
+                .sortedByDescending { it.lastRead }
+                .map { it.copy() },
+        )
+
+        override suspend fun getDetail(
+            deviceId: String,
+            bookName: String,
+            bookAuthor: String,
+            date: String,
+        ): ReadRecordDetail? = details.firstOrNull {
+            it.deviceId == deviceId &&
+                it.bookName == bookName &&
+                it.bookAuthor == bookAuthor &&
+                it.date == date
+        }?.copy()
+
+        override suspend fun getDetailsByBook(deviceId: String, bookName: String, bookAuthor: String): List<ReadRecordDetail> = details.filter {
+            it.deviceId == deviceId && it.bookName == bookName && it.bookAuthor == bookAuthor
+        }.map { it.copy() }
+
+        override fun getAllDetails(): Flow<List<ReadRecordDetail>> = flowOf(details.sortedByDescending { it.date }.map { it.copy() })
+
+        override fun detailsCountFlow(): Flow<Int> = flowOf(details.size)
+
+        override suspend fun getDetailsPage(limit: Int, offset: Int): List<ReadRecordDetail> = details.sortedByDescending { it.date }
+            .drop(offset)
+            .take(limit)
+            .map { it.copy() }
+
+        override suspend fun getAllDetailsList(): List<ReadRecordDetail> = details.map { it.copy() }
+
+        override fun getDetailsCount(): Int = details.size
+
+        override fun searchDetails(query: String): Flow<List<ReadRecordDetail>> = flowOf(
+            details.filter { it.bookName.contains(query) || it.bookAuthor.contains(query) }
+                .sortedByDescending { it.date }
+                .map { it.copy() },
+        )
+
+        override suspend fun deleteDetailsByBook(deviceId: String, bookName: String, bookAuthor: String) {
+            details.removeAll {
+                it.deviceId == deviceId && it.bookName == bookName && it.bookAuthor == bookAuthor
+            }
+        }
+
+        override fun getAllSessions(): Flow<List<ReadRecordSession>> = flowOf(sessions.sortedByDescending { it.startTime }.map { it.copy() })
+
+        override fun sessionsCountFlow(): Flow<Int> = flowOf(sessions.size)
+
+        override suspend fun getSessionsPage(limit: Int, offset: Int): List<ReadRecordSession> = sessions.sortedByDescending { it.startTime }
+            .drop(offset)
+            .take(limit)
+            .map { it.copy() }
+
+        override suspend fun getAllSessionsList(): List<ReadRecordSession> = sessions.map { it.copy() }
+
+        override fun getSessionsCount(): Int = sessions.size
+
+        override fun getSessionsByBookFlow(deviceId: String, bookName: String, bookAuthor: String): Flow<List<ReadRecordSession>> = flowOf(
+            sessions.filter {
+                it.deviceId == deviceId && it.bookName == bookName && it.bookAuthor == bookAuthor
+            }.map { it.copy() },
+        )
+
+        override suspend fun getSessionsByBook(deviceId: String, bookName: String, bookAuthor: String): List<ReadRecordSession> = sessions.filter {
+            it.deviceId == deviceId && it.bookName == bookName && it.bookAuthor == bookAuthor
+        }.map { it.copy() }
+
+        override suspend fun getSessionsByBookAndDate(
+            deviceId: String,
+            bookName: String,
+            bookAuthor: String,
+            date: String,
+        ): List<ReadRecordSession> = getSessionsByBook(deviceId, bookName, bookAuthor).filter {
+            java.text.SimpleDateFormat("yyyy-MM-dd").format(java.util.Date(it.startTime)) == date
+        }
+
+        override suspend fun getSessionExact(
+            deviceId: String,
+            bookName: String,
+            bookAuthor: String,
+            startTime: Long,
+            endTime: Long,
+            words: Long,
+        ): ReadRecordSession? = sessions.firstOrNull {
+            it.deviceId == deviceId &&
+                it.bookName == bookName &&
+                it.bookAuthor == bookAuthor &&
+                it.startTime == startTime &&
+                it.endTime == endTime &&
+                it.words == words
+        }?.copy()
+
+        override suspend fun deleteSessionsByBook(deviceId: String, bookName: String, bookAuthor: String) {
+            sessions.removeAll {
+                it.deviceId == deviceId && it.bookName == bookName && it.bookAuthor == bookAuthor
+            }
+        }
+
+        override suspend fun getDistinctSessionIdentities(): List<SessionIdentity> {
+            return sessions.map { SessionIdentity(it.deviceId, it.bookName, it.bookAuthor) }.distinct()
+        }
+
+        override suspend fun deleteSessionsByIds(ids: List<Long>) {
+            sessions.removeAll { it.id in ids }
+        }
+
+        override suspend fun deleteSessionsByBookAndDate(
+            deviceId: String,
+            bookName: String,
+            bookAuthor: String,
+            date: String,
+        ) {
+            sessions.removeAll {
+                it.deviceId == deviceId &&
+                    it.bookName == bookName &&
+                    it.bookAuthor == bookAuthor &&
+                    java.text.SimpleDateFormat("yyyy-MM-dd").format(java.util.Date(it.startTime)) == date
+            }
+        }
+
+        override suspend fun getRecordsWithEmptyAuthor(): List<ReadRecord> = records.filter { it.bookAuthor.isEmpty() }.map { it.copy() }
+
+        override suspend fun deleteRecordsWithBlankBookName() {
+            records.removeAll { it.bookName.isBlank() }
+        }
+
+        override suspend fun deleteDetailsWithBlankBookName() {
+            details.removeAll { it.bookName.isBlank() }
+        }
+
+        override suspend fun deleteSessionsWithBlankBookName() {
+            sessions.removeAll { it.bookName.isBlank() }
+        }
+
+        override suspend fun updateAuthorByBookName(deviceId: String, bookName: String, author: String) {
+            records.indices.forEach { index ->
+                val record = records[index]
+                if (record.deviceId == deviceId && record.bookName == bookName && record.bookAuthor.isEmpty()) {
+                    records[index] = record.copy(bookAuthor = author)
+                }
+            }
+        }
+
+        override suspend fun getBookReadTimes(): List<BookReadTime> = details.groupBy { it.bookName to it.bookAuthor }
+            .map { (identity, grouped) ->
+                BookReadTime(identity.first, identity.second, grouped.sumOf { it.readTime })
+            }
+
+        override suspend fun deleteReadRecord(record: ReadRecord) {
+            delete(record)
+        }
+
+        // ==================== SQL 聚合查询实现 ====================
+
+        override fun getDailyStats(): Flow<List<DailyReadStat>> = flowOf(
+            details.groupBy { it.date }
+                .map { (date, grouped) ->
+                    DailyReadStat(date, grouped.size, grouped.sumOf { it.readTime })
+                },
+        )
+
+        override fun getReadTimeByDate(date: String): Flow<Long> = flowOf(details.filter { it.date == date }.sumOf { it.readTime })
+
+        override fun getBookCountByDate(date: String): Flow<Int> = flowOf(
+            details.filter { it.date == date }
+                .map { Triple(it.deviceId, it.bookName, it.bookAuthor) }
+                .distinct()
+                .size,
+        )
+
+        override suspend fun getFilteredDetailsPage(
+            query: String,
+            dateFilter: String?,
+            limit: Int,
+            offset: Int,
+        ): List<ReadRecordDetail> = details
+            .filter { d ->
+                (query.isEmpty() || d.bookName.contains(query) || d.bookAuthor.contains(query)) &&
+                    (dateFilter == null || d.date == dateFilter)
+            }
+            .sortedWith(compareByDescending<ReadRecordDetail> { it.date }.thenByDescending { it.readTime })
+            .drop(offset)
+            .take(limit)
+            .map { it.copy() }
+
+        override suspend fun getFilteredSessionsPage(
+            query: String,
+            dateFilter: String?,
+            limit: Int,
+            offset: Int,
+        ): List<ReadRecordSession> {
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd")
+            return sessions
+                .filter { s ->
+                    (query.isEmpty() || s.bookName.contains(query) || s.bookAuthor.contains(query)) &&
+                        (dateFilter == null || sdf.format(java.util.Date(s.startTime)) == dateFilter)
+                }
+                .sortedByDescending { it.startTime }
+                .drop(offset)
+                .take(limit)
+                .map { it.copy() }
+        }
+
+        override suspend fun getFilteredSessionsBefore(
+            query: String,
+            dateFilter: String?,
+            beforeTimestamp: Long?,
+            limit: Int,
+        ): List<ReadRecordSession> {
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd")
+            return sessions
+                .filter { s ->
+                    (query.isEmpty() || s.bookName.contains(query) || s.bookAuthor.contains(query)) &&
+                        (dateFilter == null || sdf.format(java.util.Date(s.startTime)) == dateFilter) &&
+                        (beforeTimestamp == null || s.startTime < beforeTimestamp)
+                }
+                .sortedByDescending { it.startTime }
+                .take(limit)
+                .map { it.copy() }
+        }
+
+        override fun getRecordsWithDetailTime(query: String): Flow<List<ReadRecord>> {
+            val detailSums = details.groupBy {
+                Triple(it.deviceId, it.bookName, it.bookAuthor)
+            }.mapValues { (_, grouped) -> grouped.sumOf { it.readTime } }
+            return flowOf(
+                records
+                    .filter { r ->
+                        query.isEmpty() || r.bookName.contains(query) || r.bookAuthor.contains(query)
+                    }
+                    .map { r ->
+                        val key = Triple(r.deviceId, r.bookName, r.bookAuthor)
+                        r.copy(readTime = maxOf(r.readTime, detailSums[key] ?: 0L))
+                    }
+                    .sortedByDescending { it.lastRead },
+            )
+        }
+
+        override fun getRecordsByDate(query: String, date: String): Flow<List<ReadRecord>> = flowOf(
+            details.filter { d ->
+                d.date == date &&
+                    (query.isEmpty() || d.bookName.contains(query) || d.bookAuthor.contains(query))
+            }
+                .groupBy { Triple(it.deviceId, it.bookName, it.bookAuthor) }
+                .map { (identity, grouped) ->
+                    val record = records.firstOrNull {
+                        it.deviceId == identity.first &&
+                            it.bookName == identity.second &&
+                            it.bookAuthor == identity.third
+                    }
+                    ReadRecord(
+                        deviceId = identity.first,
+                        bookName = identity.second,
+                        bookAuthor = identity.third,
+                        readTime = grouped.sumOf { it.readTime },
+                        lastRead = grouped.maxOf { it.lastReadTime },
+                        durChapterTitle = record?.durChapterTitle ?: "",
+                        durChapterIndex = record?.durChapterIndex ?: 0,
+                    )
+                }
+                .sortedByDescending { it.lastRead },
+        )
+
+        override fun getBookReadTimeCalculated(
+            deviceId: String,
+            bookName: String,
+            bookAuthor: String,
+        ): Flow<Long> {
+            val recordTime = records.firstOrNull {
+                it.deviceId == deviceId && it.bookName == bookName && it.bookAuthor == bookAuthor
+            }?.readTime ?: 0L
+            val detailTime = details.filter {
+                it.deviceId == deviceId && it.bookName == bookName && it.bookAuthor == bookAuthor
+            }.sumOf { it.readTime }
+            return flowOf(maxOf(recordTime, detailTime))
+        }
+    }
+
+    private companion object {
+        const val CURRENT_DEVICE_ID = "current-device"
+    }
+}

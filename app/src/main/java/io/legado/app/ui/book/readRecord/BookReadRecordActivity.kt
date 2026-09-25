@@ -1,0 +1,377 @@
+package io.legado.app.ui.book.readRecord
+
+import android.os.Bundle
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.legado.app.base.BaseComposeActivity
+import io.legado.app.data.appDb
+import io.legado.app.data.entities.readRecord.ReadRecordSession
+import io.legado.app.data.entities.readRecord.ReadRecordTimelineDay
+import io.legado.app.data.repository.ReadRecordRepository
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import io.legado.app.R
+import io.legado.app.ui.widget.components.AppPageTopBar
+import io.legado.app.ui.widget.components.AppScaffold
+import io.legado.app.ui.widget.components.navigationBarBottomInset
+import io.legado.app.utils.formatReadDuration
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+class BookReadRecordActivity : BaseComposeActivity() {
+
+    companion object {
+        const val EXTRA_BOOK_NAME = "bookName"
+        const val EXTRA_BOOK_AUTHOR = "bookAuthor"
+    }
+
+    private var bookName: String = ""
+    private var bookAuthor: String = ""
+
+    override fun onActivityCreated(savedInstanceState: Bundle?) {
+        bookName = intent.getStringExtra(EXTRA_BOOK_NAME).orEmpty()
+        bookAuthor = intent.getStringExtra(EXTRA_BOOK_AUTHOR).orEmpty()
+    }
+
+    @Composable
+    override fun ComposeContent() {
+        BookReadRecordScreen(
+            bookName = bookName,
+            bookAuthor = bookAuthor,
+            onBackClick = { finish() }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BookReadRecordScreen(
+    bookName: String,
+    bookAuthor: String,
+    onBackClick: () -> Unit
+) {
+    val repository = remember { ReadRecordRepository(appDb.readRecordDao) }
+
+    // 时间线口径：按天分组 + 合并碎片会话（与阅读记录页时间线视图一致），
+    // 避免翻页高频上报产生的同一秒内多条记录直接展示
+    val timelineDays = repository.getBookTimelineDays(bookName, bookAuthor)
+        .collectAsStateWithLifecycle(emptyList())
+        .value
+
+    // SQL 聚合：总阅读时间
+    val totalReadTime = repository.getBookReadTime(bookName, bookAuthor)
+        .collectAsStateWithLifecycle(0L)
+        .value
+
+    val totalSessionCount = timelineDays.sumOf { it.sessions.size }
+    AppScaffold(
+        topBar = {
+            AppPageTopBar(
+                title = bookName,
+                onBackClick = onBackClick
+            )
+        }
+    ) { padding ->
+        // 改用透明容器：背景统一由外层 LegadoBackgroundBox 承载，主题背景图才能透出
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            if (timelineDays.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Filled.MenuBook,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = stringResource(R.string.rr_no_records),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                val listState = rememberLazyListState()
+                val scrollbarColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .drawWithContent {
+                            drawContent()
+                            val totalItems = listState.layoutInfo.totalItemsCount
+                            if (totalItems > 0) {
+                                val visibleItems = listState.layoutInfo.visibleItemsInfo.size
+                                val fraction = visibleItems.toFloat() / totalItems.toFloat()
+                                val barHeight = size.height * fraction.coerceIn(0.04f, 1f)
+                                val progress = listState.firstVisibleItemIndex.toFloat()
+                                    .coerceAtMost((totalItems - visibleItems).coerceAtLeast(0).toFloat())
+                                val maxScroll = (totalItems - visibleItems).coerceAtLeast(1).toFloat()
+                                val barY = (size.height - barHeight) * (progress / maxScroll).coerceIn(0f, 1f)
+                                drawRoundRect(
+                                    color = scrollbarColor,
+                                    topLeft = Offset(size.width - 5.dp.toPx(), barY),
+                                    size = Size(3.dp.toPx(), barHeight),
+                                    cornerRadius = CornerRadius(1.5.dp.toPx())
+                                )
+                            }
+                        },
+                    contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp + navigationBarBottomInset),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    item(key = "summary") {
+                        SummaryHeader(
+                            totalReadTime = totalReadTime,
+                            dayCount = timelineDays.size,
+                            sessionCount = totalSessionCount
+                        )
+                    }
+
+                    items(
+                        items = timelineDays,
+                        key = { it.date }
+                    ) { day ->
+                        DaySection(
+                            day = day
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryHeader(
+    totalReadTime: Long,
+    dayCount: Int,
+    sessionCount: Int
+) {
+    val context = LocalContext.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        StatChip(
+            icon = Icons.Filled.Timer,
+            label = formatReadDuration(context, totalReadTime),
+            suffix = stringResource(R.string.rr_read_suffix)
+        )
+        StatChip(
+            label = sessionCount.toString(),
+            suffix = stringResource(R.string.rr_times_suffix)
+        )
+        StatChip(
+            label = dayCount.toString(),
+            suffix = stringResource(R.string.rr_days_suffix)
+        )
+    }
+}
+
+@Composable
+private fun StatChip(
+    icon: ImageVector? = null,
+    label: String,
+    suffix: String
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.width(2.dp))
+        Text(
+            text = suffix,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun DaySection(
+    day: ReadRecordTimelineDay
+) {
+    val context = LocalContext.current
+    var expanded by remember { mutableStateOf(false) }
+    val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    val sessions = day.sessions
+    val date = day.date
+    val sessionCount = sessions.size
+    // 日合计用当天真实阅读时长（未合并会话之和）；合并后的展示时段端点跨度包含暂停间隙，不能直接求和
+    val totalDuration = day.readTime
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+            .clickable { expanded = !expanded }
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = date,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "${sessionCount}" + stringResource(R.string.rr_times_suffix),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = formatReadDuration(context, totalDuration),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.width(2.dp))
+                Icon(
+                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                )
+            }
+        }
+
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(),
+            exit = shrinkVertically()
+        ) {
+            Column(
+                modifier = Modifier.padding(top = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                sessions.forEach { item ->
+                    // 行时长用该时段内的真实阅读时长（不含合并间隙），保证行时长之和等于日合计
+                    SessionRow(item.session, timeFormat, item.readTime)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionRow(session: ReadRecordSession, timeFormat: SimpleDateFormat, duration: Long) {
+    val context = LocalContext.current
+    val start = remember(session.startTime) { Date(session.startTime) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.45f))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = timeFormat.format(start),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.Medium
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = formatReadDuration(context, duration),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Medium
+        )
+        session.durChapterTitle.takeIf { it.isNotBlank() }?.let { title ->
+            Spacer(modifier = Modifier.width(8.dp))
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+        }
+    }
+}

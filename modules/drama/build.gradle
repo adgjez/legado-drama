@@ -1,0 +1,82 @@
+plugins {
+    alias libs.plugins.android.library
+    alias libs.plugins.kotlin.android
+    alias libs.plugins.kotlin.compose
+    alias libs.plugins.room
+    alias libs.plugins.ksp
+}
+
+android {
+    compileSdk = compile_sdk_version
+    namespace = 'com.legado.drama'
+    kotlin {
+        jvmToolchain {
+            languageVersion.set(JavaLanguageVersion.of(17))
+        }
+    }
+    defaultConfig {
+        minSdk 23
+        consumerProguardFiles "consumer-rules.pro"
+    }
+    room {
+        schemaDirectory "$projectDir/schemas"
+    }
+    ksp {
+        arg("room.incremental", "true")
+        arg("room.expandProjection", "true")
+        arg("room.generateKotlin", "false")
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    buildFeatures {
+        compose = true
+    }
+    lint {
+        checkDependencies = true
+        targetSdk 37
+    }
+    testOptions {
+        targetSdk 37
+    }
+}
+
+dependencies {
+    api project(':modules:drama-engine')
+
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons.extended)
+    implementation(libs.compose.ui)
+    implementation(libs.compose.ui.graphics)
+    implementation(libs.compose.ui.tooling.preview)
+    implementation(libs.compose.foundation)
+    implementation(libs.compose.runtime)
+    implementation(libs.activity.compose)
+    implementation(libs.lifecycle.viewmodel.compose)
+    implementation(libs.lifecycle.runtime.compose)
+    debugImplementation(libs.compose.ui.tooling)
+
+    implementation(libs.room.runtime)
+    implementation(libs.room.ktx)
+    ksp(libs.room.compiler)
+
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.okhttp)
+    implementation(libs.ktor.client.content.negotiation)
+    implementation(libs.ktor.serialization.kotlinx.json)
+    implementation(libs.ktor.client.logging)
+
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.android)
+
+    // 端侧成片合成：Media3 Transformer（ffmpeg-kit-full 上游已归档无法获取，
+    // 架构文档 R1 允许降级路径：同规格拼接/分段导出）
+    implementation(libs.media3.transformer)
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.ui)
+    implementation(libs.core.ktx)
+    implementation(libs.androidx.annotation)
+}

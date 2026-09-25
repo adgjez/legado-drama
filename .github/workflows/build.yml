@@ -1,0 +1,86 @@
+name: Build Verify
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# 同一分支连续 push 时取消旧任务，节省资源
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  commitlint:
+    name: Commitlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          # 0 = 拉全量历史：commitlint --from 需要比较基线
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - name: Install JS deps (commitlint)
+        # commitlint 依赖在 package-lock.json 里，CI 无本地 node_modules，需先安装
+        run: npm ci --ignore-scripts
+
+      - name: Check Commit Messages
+        # 校验本次提交是否符合 Conventional Commits（本地 commit-msg 钩子的 CI 兜底）
+        run: |
+          if git rev-parse --verify origin/main >/dev/null 2>&1; then
+            npx --no -- commitlint --from origin/main --to HEAD
+          else
+            echo "origin/main 不存在（首个提交），跳过 commitlint 校验"
+          fi
+
+  build-debug:
+    name: Build AppMax Debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: 17
+
+      - name: Cache Gradle Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            app/build/caches
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Build AppMax Debug APK
+        run: |
+          chmod +x gradlew
+          # 纯构建验证：主 flavor appMax 的 debug 变体
+          ./gradlew assembleAppMaxDebug --parallel --daemon --warning-mode all
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: appMax-debug-apk
+          path: app/build/outputs/apk/appMax/debug/*.apk
+          retention-days: 7

@@ -1,0 +1,92 @@
+package io.legado.app.base
+
+import android.annotation.SuppressLint
+import android.content.res.Configuration
+import android.os.Bundle
+import android.view.Menu
+import android.view.MenuInflater
+import android.view.MenuItem
+import android.view.View
+import androidx.annotation.LayoutRes
+import androidx.appcompat.view.SupportMenuInflater
+import androidx.appcompat.widget.Toolbar
+import androidx.fragment.app.Fragment
+import io.legado.app.R
+import io.legado.app.constant.EventBus
+import io.legado.app.help.config.AppConfig
+import io.legado.app.ui.widget.TitleBar
+import io.legado.app.ui.widget.applyTopBarConfig
+import io.legado.app.utils.applyTint
+import io.legado.app.utils.observeEvent
+
+@Suppress("MemberVisibilityCanBePrivate")
+abstract class BaseFragment(@LayoutRes layoutID: Int) : Fragment(layoutID) {
+
+    var supportToolbar: Toolbar? = null
+        private set
+
+    val menuInflater: MenuInflater
+        @SuppressLint("RestrictedApi")
+        get() = SupportMenuInflater(requireContext())
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        onMultiWindowModeChanged()
+        observeLiveBus()
+        // 顶栏配置变更时，重新应用顶栏配置到当前 Fragment 的 TitleBar
+        observeEvent<Boolean>(EventBus.TOP_BAR_CHANGED) { isNightMode ->
+            if (isNightMode == AppConfig.isNightTheme) {
+                view.findViewById<TitleBar>(R.id.title_bar)?.applyTopBarConfig()
+            }
+        }
+        onFragmentCreated(view, savedInstanceState)
+        // 首次创建也要应用一次顶栏配置：TOP_BAR_CHANGED 只在配置/主题变更时发送，
+        // 不应用的话 TitleBar 子视图（TabLayout/SearchView）会停留在 XML 主题默认色，
+        // 顶栏背景较浅时出现白色文字看不清的问题
+        view.findViewById<TitleBar>(R.id.title_bar)?.applyTopBarConfig()
+    }
+
+    abstract fun onFragmentCreated(view: View, savedInstanceState: Bundle?)
+
+    override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean) {
+        super.onMultiWindowModeChanged(isInMultiWindowMode)
+        onMultiWindowModeChanged()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        onMultiWindowModeChanged()
+    }
+
+    private fun onMultiWindowModeChanged() {
+        (activity as? BaseActivity<*>)?.let {
+            view?.findViewById<TitleBar>(R.id.title_bar)
+                ?.onMultiWindowModeChanged(it.isInMultiWindow, it.fullScreen)
+        }
+    }
+
+    fun setSupportToolbar(toolbar: Toolbar) {
+        supportToolbar = toolbar
+        supportToolbar?.let {
+            it.menu.apply {
+                onCompatCreateOptionsMenu(this)
+                applyTint(requireContext())
+            }
+
+            it.setOnMenuItemClickListener { item ->
+                onCompatOptionsItemSelected(item)
+                true
+            }
+        }
+    }
+
+    open fun observeLiveBus() {
+    }
+
+    open fun onCompatCreateOptionsMenu(menu: Menu) {
+    }
+
+    open fun onCompatOptionsItemSelected(item: MenuItem) {
+    }
+
+}
