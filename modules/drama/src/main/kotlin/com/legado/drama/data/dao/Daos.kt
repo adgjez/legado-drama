@@ -66,6 +66,9 @@ interface EpisodeDao {
     @Query("SELECT * FROM episodes WHERE project_id = :projectId ORDER BY ep_no")
     fun observeByProject(projectId: String): Flow<List<EpisodeEntity>>
 
+    @Query("SELECT * FROM episodes")
+    suspend fun listAll(): List<EpisodeEntity>
+
     @Query("SELECT * FROM episodes WHERE project_id = :projectId ORDER BY ep_no")
     suspend fun listByProject(projectId: String): List<EpisodeEntity>
 
@@ -143,6 +146,9 @@ interface ProviderConfigDao {
 
     @Query("SELECT * FROM provider_configs WHERE channel = :channel ORDER BY updated_at DESC LIMIT 1")
     suspend fun latestByChannel(channel: String): ProviderConfigEntity?
+
+    @Query("SELECT * FROM provider_configs WHERE channel IN (:channels)")
+    suspend fun listByChannels(channels: List<String>): List<ProviderConfigEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(config: ProviderConfigEntity)

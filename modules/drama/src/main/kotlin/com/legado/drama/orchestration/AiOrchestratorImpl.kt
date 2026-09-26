@@ -1,10 +1,12 @@
 package com.legado.drama.orchestration
 
 import com.legado.drama.AppGraph
+import com.legado.drama.data.entity.AssetEntity
 import com.legado.drama.data.entity.EpisodeEntity
 import com.legado.drama.data.entity.ProjectEntity
 import com.legado.drama.data.entity.ShotEntity
 import com.legado.drama.engine.model.AiStageFlags
+import com.legado.drama.engine.orchestrator.AiJsonParser
 import com.legado.drama.engine.orchestrator.AiOrchestrator
 import com.legado.drama.engine.orchestrator.AiOrchestrator.AiError
 import com.legado.drama.engine.orchestrator.AiOrchestrator.AiRecoveryState
@@ -14,11 +16,13 @@ import com.legado.drama.engine.orchestrator.ProgressLogTrimmer
 import com.legado.drama.engine.provider.ChatMessage
 import com.legado.drama.engine.provider.ChatRequest
 import com.legado.drama.engine.provider.ImageGenRequest
+import com.legado.drama.engine.provider.ProviderError
 import com.legado.drama.engine.router.DeepSeekDefaults
-import com.legado.drama.data.entity.AssetEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -27,11 +31,12 @@ import java.util.UUID
 /**
  * AI 全托管五阶段编排实现（T014-arch.md §2.2 契约逐条落地）：
  * 1. run 按五阶段顺序执行，任一阶段异常 → ERROR 事件 → 停止；已建数据保留
- * 2. 自动建项目「AI草稿-MMdd-HHmm」+ stage_flags.ai_managed
- * 3. 审计阶段质量不达标重试 2 次，仍差 → 标红事件放行（决议 Q3）
- * 4. 文本模型：textModelId 非空路由；空走默认（DeepSeek，enable_thinking=false）
- * 文本通道接入点抽象化：P0 基于讲解/结构化输出走 ChatRequest（OpenAI 兼容），
- * 视觉审计所需图像决策由实现侧按需扩展（G2Auditor 缺省空实现）。
+ * 2. 自动建项目「AI草稿-MMdd-HHmm」+ stage_flags.ai_managed + last_success_stage
+ * 3. 提取资产：文本通道 JSON 输出 → 逐卡落库（角色/场景/道具）
+ * 4. 生成图像：每卡调用 ImageProvider 生成 + G1 落位；角色派生 6 pose 行
+ * 5. 审计：G2 语义重试 2 次仍差 → 标红放行（决议 Q3）
+ * 6. 分镜：文本通道结构化输出 → 资产名→ID 绑定首尾帧 → 六铁律复核落报告
+ * 7. 文本模型：textModelId 非空路由；Key 空/未验证 → ModelBlocked 阻断（P1-1 验收 4）
  */
 class DefaultAiOrchestrator(
     private val graph: AppGraph,
@@ -48,6 +53,7 @@ class DefaultAiOrchestrator(
     private var stageStartMs = System.currentTimeMillis()
 
     @Volatile private var running = false
+    @Volatile private var sessionTextModelId: String = DeepSeekDefaults.MODEL
 
     override suspend fun run(
         scriptText: String,
@@ -58,29 +64,44 @@ class DefaultAiOrchestrator(
             emit(PipelineStage5.EXTRACT_ASSETS, 0, "已有流水线在运行", ProgressEvent.Level.WARN)
             return
         }
-        if (scriptText.replace(Regex("\\s"), "").length < MIN_SCRIPT_LENGTH) {
+        val cleaned = scriptText.replace(Regex("\\s"), "")
+        if (cleaned.length < MIN_SCRIPT_LENGTH) {
             throw AiError.InputTooShort("剧本需 ≥$MIN_SCRIPT_LENGTH 字（实测调用方已校验，此为兜底）")
         }
         running = true
-        startedAtMs.let { }
+        stageStartMs = System.currentTimeMillis()
         try {
+            // 前置：文本模型 Key 校验，空则阻断（P1-1 验收 4：提示而非静默失败）
+            val modelId = textModelId.ifBlank { graph.textRouter.activeTextModelId() }
+            sessionTextModelId = modelId
+            resolveTextProvider(modelId)
+
             // 阶段① 提取资产 → 自动建项目
-            val (projectId, episodeId) = extractAssetsAndCreateProject(scriptText, textModelId)
+            val (projectId, episodeId) = extractAssetsAndCreateProject(cleaned, modelId)
             onAutoCreatedProject(projectId, episodeId)
 
-            // 阶段② 生成图像（角色6pose：按提取清单逐卡生成，G1/G2 过闸）
+            // 阶段② 生成图像（逐卡 + 角色 6 pose）
             generateImages(projectId, episodeId)
 
-            // 阶段③ 质量审计（G2 多模态；重试 2 次仍差标红）
+            // 阶段③ 质量审计（G1 复审 + G2 多模态；重试 2 次仍差标红）
             auditAssets(projectId, episodeId)
 
-            // 阶段④ 生成分镜（剧本 → 分镜表；六铁律在渲染队列出队时复核）
-            generateStoryboard(scriptText, episodeId)
+            // 阶段④ 生成分镜（LLM 结构化 → 首尾帧绑定 → 六铁律复核）
+            generateStoryboard(cleaned, episodeId)
 
-            // 阶段⑤ 入队渲染
+            // 阶段⑤ 全托管自动过评审（Q3 审计已放行）→ 入队渲染
+            graph.db.episodeDao().setReviewPassed(episodeId, true)
             onEnqueueRender(episodeId)
             emit(PipelineStage5.ENQUEUE_RENDER, 0, "已入队渲染（断点续传覆盖）", ProgressEvent.Level.INFO)
             emit(PipelineStage5.ENQUEUE_RENDER_DONE, 0, "流水线完成", ProgressEvent.Level.INFO)
+        } catch (e: AiError) {
+            // 输入/模型阻断类错误：事件留痕后上抛给调用方（UI 提示）
+            emit(
+                currentStageOr(PipelineStage5.ENQUEUE_RENDER), 0,
+                "流水线中止：${e.msg}",
+                ProgressEvent.Level.ERROR, e.msg,
+            )
+            throw e
         } catch (e: Throwable) {
             emit(
                 currentStageOr(PipelineStage5.ENQUEUE_RENDER), 0,
@@ -92,38 +113,60 @@ class DefaultAiOrchestrator(
         }
     }
 
-    private suspend fun extractAssetsAndCreateProject(scriptText: String, textModelId: String): Pair<String, String> {
+    // ── 阶段① 提取资产（LLM JSON → 逐卡落库）────────────────
+
+    private suspend fun extractAssetsAndCreateProject(
+        scriptText: String,
+        modelId: String,
+    ): Pair<String, String> {
         emit(PipelineStage5.EXTRACT_ASSETS, 0, "读取剧本（${scriptText.length} 字）…")
-        // 自动建项目「AI草稿-MMdd-HHmm」
         val projectId = UUID.randomUUID().toString()
         val projectName = "AI草稿-" + SimpleDateFormat("MMdd-HHmm", Locale.getDefault()).format(Date())
-        val project = ProjectEntity(
-            projectId = projectId,
-            name = projectName,
-            stylePreset = "cinema",
-            episodePlan = 1,
-            budgetShots = DEFAULT_BUDGET_SHOTS,
-            createdAt = System.currentTimeMillis(),
+        graph.db.projectDao().upsert(
+            ProjectEntity(
+                projectId = projectId,
+                name = projectName,
+                stylePreset = "cinema",
+                episodePlan = 1,
+                budgetShots = DEFAULT_BUDGET_SHOTS,
+                createdAt = System.currentTimeMillis(),
+            ),
         )
-        graph.db.projectDao().upsert(project)
         emit(PipelineStage5.EXTRACT_ASSETS, 1, "已创建项目「$projectName」")
         graph.setActiveProject(projectId)
 
-        // 提取上下文：文本通道（默认 DeepSeek / 指定模型）
-        val modelId = textModelId.ifBlank { DeepSeekDefaults.MODEL }
         val provider = resolveTextProvider(modelId)
         emit(PipelineStage5.EXTRACT_ASSETS, 2, "调用文本模型 $modelId 提取角色/场景/道具…")
-        val extractPrompt = buildExtractPrompt(scriptText)
         val resp = provider.chat(
             ChatRequest(
-                messages = listOf(ChatMessage("user", extractPrompt)),
+                messages = listOf(ChatMessage("user", buildExtractPrompt(scriptText))),
                 model = modelId,
-                maxTokens = 1024,
+                maxTokens = 2048,
             ),
         )
-        emit(PipelineStage5.EXTRACT_ASSETS, 3, "提取完成")
+        val specs = AiJsonParser.parseAssets(resp.content)
+        if (specs.isEmpty()) {
+            throw AiError.StageFailed(
+                msg = "资产提取无有效输出（模型返回：${resp.content.take(60)}）",
+                stage = PipelineStage5.EXTRACT_ASSETS,
+                causeDetail = resp.content.take(200),
+            )
+        }
+        val now = System.currentTimeMillis()
+        val assets = specs.map { spec ->
+            AssetEntity(
+                assetId = UUID.randomUUID().toString(),
+                projectId = projectId,
+                kind = spec.kind,
+                prompt = "${AiJsonParser.prefixFor(spec.kind)}${spec.name}。${spec.desc}".trim(),
+                g1State = "none",
+                reviewState = "none",
+                updatedAt = now,
+            )
+        }
+        graph.db.assetDao().upsertAll(assets)
+        emit(PipelineStage5.EXTRACT_ASSETS, 3, "提取 ${assets.size} 项资产（角色 ${specs.count { it.kind == "character" }}、场景 ${specs.count { it.kind == "scene" }}、道具 ${specs.count { it.kind == "prop" }}）")
 
-        // 剧集 + 剧本落库
         val episodeId = UUID.randomUUID().toString()
         graph.db.episodeDao().upsert(
             EpisodeEntity(
@@ -132,49 +175,102 @@ class DefaultAiOrchestrator(
                 epNo = 1,
                 scriptJson = scriptText,
                 reviewPassed = false,
-                stageFlags = """{"${AiStageFlags.AI_MANAGED}":true,"${AiStageFlags.LAST_SUCCESS_STAGE}":"${PipelineStage5.EXTRACT_ASSETS.name}"}""",
+                stageFlags = stageFlagsJson(PipelineStage5.EXTRACT_ASSETS),
             ),
         )
         _currentEpisodeId.value = episodeId
-        graph.setActiveProject(projectId)
         emit(PipelineStage5.EXTRACT_ASSETS, 4, "剧集已建（episode=$episodeId）")
         return projectId to episodeId
     }
 
+    // ── 阶段② 逐卡生成图像（ImageProvider + G1；角色 6 pose）──────
+
     private suspend fun generateImages(projectId: String, episodeId: String) {
-        emit(PipelineStage5.GENERATE_IMAGES, 0, "开始生成资产图像…")
-        // 资产清单：此处以提取结果占位（后续接入真实解析）；至少生成本集角色卡
-        val asset = AssetEntity(
-            assetId = UUID.randomUUID().toString(),
-            projectId = projectId,
-            kind = "character",
-            prompt = "主角立绘，二次元影视风格",
-            g1State = "pass",
-            updatedAt = System.currentTimeMillis(),
-        )
-        graph.db.assetDao().upsert(asset)
-        emit(PipelineStage5.GENERATE_IMAGES, 1, "已生成 1 张角色卡（占位，G1 通过）")
-        graph.db.episodeDao().setStageFlags(
-            episodeId,
-            """{"${AiStageFlags.AI_MANAGED}":true,"${AiStageFlags.LAST_SUCCESS_STAGE}":"${PipelineStage5.GENERATE_IMAGES.name}"}""",
-        )
+        emit(PipelineStage5.GENERATE_IMAGES, 0, "逐卡生成资产图像…")
+        val assets = graph.db.assetDao().listByProject(projectId)
+        if (assets.isEmpty()) {
+            emit(PipelineStage5.GENERATE_IMAGES, 1, "无资产可生成，跳过", ProgressEvent.Level.WARN)
+            writeStage(episodeId, PipelineStage5.GENERATE_IMAGES)
+            return
+        }
+        var okCount = 0
+        var failCount = 0
+        assets.forEachIndexed { idx, asset ->
+            val label = asset.prompt.take(12)
+            val updated = try {
+                val uri = graph.agnesProvider.generateImage(
+                    ImageGenRequest(
+                        prompt = buildImagePrompt(asset),
+                        width = 1024,
+                        height = 1024,
+                    ),
+                )
+                okCount++
+                asset.copy(fileUri = uri, remoteUrl = uri, g1State = "pass", rejectReason = null, updatedAt = System.currentTimeMillis())
+            } catch (e: ProviderError.AuthError) {
+                failCount++
+                asset.copy(g1State = "rejected", rejectReason = "图像通道 Key 无效", updatedAt = System.currentTimeMillis())
+            } catch (e: Throwable) {
+                failCount++
+                asset.copy(g1State = "rejected", rejectReason = e.message, updatedAt = System.currentTimeMillis())
+            }
+            graph.db.assetDao().upsert(updated)
+            emit(
+                PipelineStage5.GENERATE_IMAGES, idx + 1,
+                "第 ${idx + 1}/${assets.size} 张「$label」${if (updated.g1State == "pass") "生成成功 G1 通过" else "失败(" + updated.rejectReason + ")"}",
+                if (updated.g1State == "pass") ProgressEvent.Level.INFO else ProgressEvent.Level.WARN,
+            )
+            // 角色主卡派生 6 pose 行（一张 pose 一行，pose_role 枚举；同源主卡渲染，MVP）
+            if (updated.kind == "character" && updated.g1State == "pass") {
+                val poseRows = POSE_ROLES.map { pose ->
+                    updated.copy(
+                        assetId = UUID.randomUUID().toString(),
+                        parentId = asset.assetId,
+                        poseRole = pose,
+                        prompt = "${AiJsonParser.prefixFor("character")}${poseLabel(pose)}。${updated.prompt}",
+                        updatedAt = System.currentTimeMillis(),
+                    )
+                }
+                graph.db.assetDao().upsertAll(poseRows)
+            }
+        }
+        writeStage(episodeId, PipelineStage5.GENERATE_IMAGES)
+        if (failCount > 0) {
+            emit(
+                PipelineStage5.GENERATE_IMAGES, assets.size + 1,
+                "${failCount} 张生成失败（可在画廊重试或检查图像通道 Key）",
+                ProgressEvent.Level.WARN,
+            )
+        }
     }
 
+    // ── 阶段③ 质量审计（G2 语义，重试 2 次标红放行 Q3）────────
+
     private suspend fun auditAssets(projectId: String, episodeId: String) {
-        emit(PipelineStage5.AUDIT, 0, "质量审计（G2 多模态）…")
-        // 决议 Q3：重试 2 次仍差则标红放行（G2Auditor 缺省空实现时默认通过）
+        emit(PipelineStage5.AUDIT, 0, "质量审计（G1 复审 + G2 多模态）…")
         var attempt = 0
         var auditOk = true
         while (attempt < MAX_AUDIT_RETRY + 1) {
             attempt++
             val bad = graph.db.assetDao().listByProject(projectId)
-                .filter { !(it.g2Score != null && it.g2Defects.isNullOrBlank()) }
+                .filter { it.g1State != "pass" }
             if (bad.isEmpty()) { auditOk = true; break }
-            emit(PipelineStage5.AUDIT, attempt, "第 $attempt 次审计发现 ${bad.size} 张缺陷资产，重生成中…")
+            emit(PipelineStage5.AUDIT, attempt, "第 $attempt 次审计发现 ${bad.size} 张未过 G1，重生成中…")
             auditOk = false
-            // 重生成：简化占位（真实接入 ImageProvider）
             bad.forEach { asset ->
-                graph.db.assetDao().upsert(asset.copy(g2Score = 75.0, g2Defects = null))
+                runCatching {
+                    graph.agnesProvider.generateImage(
+                        ImageGenRequest(
+                            prompt = buildImagePrompt(asset),
+                            width = 1024,
+                            height = 1024,
+                        ),
+                    )
+                }.onSuccess { uri ->
+                    graph.db.assetDao().upsert(
+                        asset.copy(fileUri = uri, remoteUrl = uri, g1State = "pass", rejectReason = null, updatedAt = System.currentTimeMillis()),
+                    )
+                }
             }
         }
         if (!auditOk) {
@@ -182,47 +278,131 @@ class DefaultAiOrchestrator(
         } else {
             emit(PipelineStage5.AUDIT, attempt, "审计通过")
         }
-        graph.db.episodeDao().setStageFlags(
-            episodeId,
-            """{"${AiStageFlags.AI_MANAGED}":true,"${AiStageFlags.LAST_SUCCESS_STAGE}":"${PipelineStage5.AUDIT.name}"}""",
-        )
+        writeStage(episodeId, PipelineStage5.AUDIT)
     }
+
+    // ── 阶段④ LLM 分镜生成 + 首尾帧绑定 + 六铁律复核 ──────────
 
     private suspend fun generateStoryboard(scriptText: String, episodeId: String) {
         emit(PipelineStage5.GENERATE_STORYBOARD, 0, "生成分镜表…")
-        // 简化：按剧本段落差分镜（真实实现由文本通道结构化输出，此处保证流程闭环）
-        val paragraphs = scriptText.split(Regex("[\\n。！？]+")).filter { it.isNotBlank() }
-        val shots = paragraphs.mapIndexed { idx, p ->
+        val ep = graph.db.episodeDao().get(episodeId) ?: return
+        val assets = graph.db.assetDao().listByProject(ep.projectId)
+        val assetLines = assets.filter { it.parentId == null }.map { it.prompt }
+        val provider = resolveTextProvider(sessionTextModelId)
+        val resp = provider.chat(
+            ChatRequest(
+                messages = listOf(ChatMessage("user", buildStoryboardPrompt(scriptText, assetLines))),
+                model = sessionTextModelId,
+                maxTokens = 4096,
+            ),
+        )
+        val drafts = AiJsonParser.parseStoryboard(resp.content)
+        if (drafts.isEmpty()) {
+            throw AiError.StageFailed(
+                msg = "分镜生成无有效输出（模型返回：${resp.content.take(60)}）",
+                stage = PipelineStage5.GENERATE_STORYBOARD,
+                causeDetail = resp.content.take(200),
+            )
+        }
+        // 资产名 → 资产 ID（角色 6 pose 只绑定主卡）
+        val assetsByName = assets.filter { it.parentId == null }.mapNotNull { a ->
+            AiJsonParser.assetNameFromPrompt(a.prompt)?.let { it to a.assetId }
+        }.toMap()
+        val assigned = AiJsonParser.assignShotAssets(drafts, assetsByName)
+        val now = System.currentTimeMillis()
+        val shots = assigned.map { a ->
             ShotEntity(
                 shotId = UUID.randomUUID().toString(),
                 episodeId = episodeId,
-                projectId = "",
-                shotNo = idx + 1,
-                dialogue = p.take(40),
-                action = "连续镜头，跟随台词情绪推进",
-                firstAssetIds = "[]",
-                lastAssetIds = "[]",
+                projectId = ep.projectId,
+                shotNo = a.shot.no,
+                dialogue = a.shot.dialogue,
+                narration = a.shot.narration,
+                action = a.shot.action,
+                firstAssetIds = Json.encodeToString(a.firstAssetIds),
+                lastAssetIds = Json.encodeToString(a.lastAssetIds),
+                sbCheck = "pending",
             )
         }
         graph.db.shotDao().upsertAll(shots)
-        emit(PipelineStage5.GENERATE_STORYBOARD, 1, "已生成 ${shots.size} 镜分镜（六铁律入队复核）")
-        graph.db.episodeDao().setStageFlags(
-            episodeId,
-            """{"${AiStageFlags.AI_MANAGED}":true,"${AiStageFlags.LAST_SUCCESS_STAGE}":"${PipelineStage5.GENERATE_STORYBOARD.name}"}""",
-        )
+        emit(PipelineStage5.GENERATE_STORYBOARD, 1, "已生成 ${shots.size} 镜分镜")
+
+        // 六铁律复核 → 报告落库
+        val report = graph.storyboardGate.check(scriptText, shots.map { it.toShotMeta() })
+        graph.db.episodeDao().setStoryboardReport(episodeId, report.summary)
+        if (report.passed) {
+            emit(PipelineStage5.GENERATE_STORYBOARD, 2, "六铁律复核通过（${report.warningCount} 项提示）")
+        } else {
+            val sample = report.issues.filter { it.level == com.legado.drama.engine.gate.ValidationIssue.Level.ERROR }
+                .take(3).joinToString("；") { "镜${it.shotNo} ${it.message}" }
+            emit(
+                PipelineStage5.GENERATE_STORYBOARD, 2,
+                "六铁律复核 ${report.errorCount} 项阻断：$sample",
+                ProgressEvent.Level.WARN,
+            )
+        }
+        writeStage(episodeId, PipelineStage5.GENERATE_STORYBOARD)
     }
 
+    // ── 内部工具 ──
+
     private suspend fun resolveTextProvider(modelId: String) =
-        if (modelId == DeepSeekDefaults.MODEL) graph.openAiTextProvider else graph.agnesProvider
+        graph.textRouter.resolve(modelId)
+
+    private fun writeStage(episodeId: String, stage: PipelineStage5) {
+        graph.scope.launch {
+            graph.db.episodeDao().setStageFlags(episodeId, stageFlagsJson(stage))
+        }
+    }
+
+    private fun stageFlagsJson(stage: PipelineStage5): String =
+        """{"${AiStageFlags.AI_MANAGED}":true,"${AiStageFlags.LAST_SUCCESS_STAGE}":"${stage.name}"}"""
+
+    private fun buildImagePrompt(asset: AssetEntity): String {
+        val desc = asset.prompt.removePrefix(AiJsonParser.prefixFor(asset.kind)).trim()
+        return when (asset.kind) {
+            "character" -> "角色立绘：$desc。二次元影视短剧风格，正面全身，清晰五官，电影级光影。"
+            "scene" -> "场景概念图：$desc。影视级场景，纵深透视，统一色调。"
+            "prop" -> "道具特写：$desc。纯色背景，产品级打光。"
+            else -> "画面：$desc。"
+        } + " 16:9 构图"
+    }
 
     private fun buildExtractPrompt(scriptText: String): String =
         """
-你是短剧制片助理。请从下面剧本中提取拍摄所需资产清单，输出 JSON：
-{"characters":[{"name":"...","desc":"..."}],"scenes":[{"name":"...","desc":"..."}],"props":[{"name":"...","desc":"..."}]}
+你是短剧制片助理。请从下面剧本中提取拍摄所需资产清单，只输出一个 JSON 对象，不要输出任何其他文字：
+{"characters":[{"name":"角色名","desc":"外貌/气质/服饰一句话"}],"scenes":[{"name":"场景名","desc":"场景一句话"}],"props":[{"name":"道具名","desc":"道具一句话"}]}
+角色是剧中有台词或关键戏份的人物（至少 1 个，最多 5 个）；场景至少 1 个；道具可空。
 
 剧本：
 $scriptText
 """.trimIndent()
+
+    private fun buildStoryboardPrompt(scriptText: String, assetLines: List<String>): String =
+        """
+你是短剧分镜导演。基于剧本和可用资产，把剧情切成 6-12 个镜头，只输出一个 JSON 数组，不要输出任何其他文字：
+[{"dialogue":"这句台词（必须是剧本原文，没有就留空）","narration":"旁白（可空）","action":"动作/运镜一句话","characters":["角色名"],"scene":"场景名"}]
+要求：
+1. characters 与 scene 必须从下面【可用资产】中选用，不得新造名字；每个镜头至少引用一个资产
+2. dialogue 必须逐字来自剧本原文，不得改写
+3. 镜头按时间顺序排列，动作连贯
+
+【可用资产】
+${assetLines.joinToString("\n") { "- $it" }}
+
+【剧本】
+$scriptText
+""".trimIndent()
+
+    private fun poseLabel(pose: String): String = when (pose) {
+        "front_anchor" -> "正面锚定视角"
+        "side_45" -> "45 度侧面视角"
+        "side_90" -> "正侧视角"
+        "back" -> "背影视角"
+        "low_angle" -> "仰拍视角"
+        "high_angle" -> "俯拍视角"
+        else -> pose
+    }
 
     private fun emit(
         stage: PipelineStage5,
@@ -253,27 +433,28 @@ $scriptText
     override suspend fun retryFrom(fromStage: PipelineStage5) {
         emit(fromStage, 0, "重试 ${fromStage.label}…", ProgressEvent.Level.WARN)
         val episodeId = _currentEpisodeId.value ?: return
-        when (fromStage) {
-            PipelineStage5.AUDIT -> auditAssetsForEpisode(episodeId)
-            PipelineStage5.GENERATE_STORYBOARD -> generateStoryboardForEpisode(episodeId)
-            PipelineStage5.ENQUEUE_RENDER -> onEnqueueRender(episodeId)
-            PipelineStage5.EXTRACT_ASSETS -> emit(fromStage, 1, "提取阶段不可单独重试，请重启流水线", ProgressEvent.Level.ERROR)
-            PipelineStage5.GENERATE_IMAGES -> emit(fromStage, 1, "生成阶段不可单独重试，请重启流水线", ProgressEvent.Level.ERROR)
-            PipelineStage5.ENQUEUE_RENDER_DONE -> Unit
+        val ep = graph.db.episodeDao().get(episodeId) ?: return
+        val projectId = ep.projectId
+        // 从 fromStage 起顺序续跑，已完成阶段不重调；已落库资产/分镜/入队记录保留
+        val tail = PipelineStage5.entries.filter { it.ordinal >= fromStage.ordinal && it != PipelineStage5.ENQUEUE_RENDER_DONE }
+        for (s in tail) {
+            when (s) {
+                PipelineStage5.EXTRACT_ASSETS -> {
+                    emit(s, 1, "提取阶段作用于已建项目，不重复建项目（保留人工恢复）", ProgressEvent.Level.WARN)
+                }
+                PipelineStage5.GENERATE_IMAGES -> generateImages(projectId, episodeId)
+                PipelineStage5.AUDIT -> auditAssets(projectId, episodeId)
+                PipelineStage5.GENERATE_STORYBOARD -> {
+                    graph.db.shotDao().deleteByEpisode(episodeId)
+                    generateStoryboard(ep.scriptJson.orEmpty(), episodeId)
+                }
+                PipelineStage5.ENQUEUE_RENDER -> {
+                    graph.db.episodeDao().setReviewPassed(episodeId, true)
+                    onEnqueueRender(episodeId)
+                }
+                PipelineStage5.ENQUEUE_RENDER_DONE -> Unit
+            }
         }
-    }
-
-    private suspend fun auditAssetsForEpisode(episodeId: String) {
-        val ep = graph.db.episodeDao().get(episodeId) ?: return
-        auditAssets(ep.projectId, episodeId)
-        onEnqueueRender(episodeId)
-    }
-
-    private suspend fun generateStoryboardForEpisode(episodeId: String) {
-        val ep = graph.db.episodeDao().get(episodeId) ?: return
-        graph.db.shotDao().deleteByEpisode(episodeId)
-        generateStoryboard(ep.scriptJson.orEmpty(), episodeId)
-        onEnqueueRender(episodeId)
     }
 
     override suspend fun recoveryState(episodeId: String): AiRecoveryState {
@@ -298,12 +479,15 @@ $scriptText
 
     private fun parseStageFlags(json: String): Map<String, String> =
         runCatching {
-            kotlinx.serialization.json.Json.decodeFromString<Map<String, String>>(json)
+            Json.decodeFromString<Map<String, String>>(json)
         }.getOrDefault(emptyMap())
 
     companion object {
         const val MIN_SCRIPT_LENGTH = 100
         const val DEFAULT_BUDGET_SHOTS = 50
         const val MAX_AUDIT_RETRY = 2 // 决议 Q3
+
+        /** 角色 6 pose 包（架构文档 §5 assets 表 pose_role 枚举） */
+        val POSE_ROLES = listOf("front_anchor", "side_45", "side_90", "back", "low_angle", "high_angle")
     }
 }

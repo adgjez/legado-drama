@@ -1,5 +1,11 @@
 package com.legado.drama.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +26,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -141,9 +148,12 @@ private fun AiPipelineScreen(
     snackbar: SnackbarHostState,
     scope: kotlinx.coroutines.CoroutineScope,
 ) {
+    val context = LocalContext.current
     var script by remember { mutableStateOf("") }
     val events by graph.aiOrchestrator.events.collectAsState()
     var running by remember { mutableStateOf(false) }
+    // Q4 版权确认框：未勾选不可一键成片
+    var copyrightChecked by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
         OutlinedTextField(
@@ -152,9 +162,14 @@ private fun AiPipelineScreen(
             modifier = Modifier.fillMaxWidth().height(140.dp),
             label = { Text("粘贴剧本（≥100 字）") },
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = copyrightChecked, onCheckedChange = { copyrightChecked = it })
+            Text("我已确认拥有剧本著作权或合法改编授权（导入版权确认 Q4）", style = MaterialTheme.typography.bodySmall)
+        }
+        Spacer(Modifier.height(4.dp))
         Button(
-            enabled = script.replace(Regex("\\s"), "").length >= 100 && !running,
+            enabled = script.replace(Regex("\\s"), "").length >= 100 && copyrightChecked && !running,
             onClick = {
                 scope.launch {
                     running = true
@@ -171,28 +186,46 @@ private fun AiPipelineScreen(
                 }
             },
         ) { Text(if (running) "流水线运行中…" else "一键成片") }
-        Spacer(Modifier.height(12.dp))
-        Text("流水线日志", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (events.isEmpty()) "流水线日志（长按任意行复制全文；超过 500 条自动裁剪早期）"
+            else "流水线日志 · ${events.size} 条",
+            style = MaterialTheme.typography.titleMedium,
+        )
         Spacer(Modifier.height(4.dp))
         LazyColumn(Modifier.weight(1f)) {
             items(events.reversed()) { e: ProgressEvent ->
-                ProgressRow(e)
+                ProgressRow(e, onLongClick = { copyLog(context, events) })
             }
         }
     }
 }
 
+/** 复制整条流水线日志到剪贴板（P2-1：长按复制去反馈） */
+private fun copyLog(context: Context, events: List<ProgressEvent>) {
+    val text = events.joinToString("\n") { e ->
+        "+${e.elapsedMs / 1000}s [${e.stage.label}] ${if (e.level != ProgressEvent.Level.INFO) "${e.level} " else ""}${e.message}"
+    }
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    cm.setPrimaryClip(ClipData.newPlainText("drama-pipeline-log", text))
+    Toast.makeText(context, "流水线日志已复制（${events.size} 条）", Toast.LENGTH_SHORT).show()
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ProgressRow(e: ProgressEvent) {
+private fun ProgressRow(e: ProgressEvent, onLongClick: () -> Unit) {
     val color = when (e.level) {
         ProgressEvent.Level.ERROR -> MaterialTheme.colorScheme.error
         ProgressEvent.Level.WARN -> MaterialTheme.colorScheme.tertiary
         ProgressEvent.Level.INFO -> MaterialTheme.colorScheme.onSurface
     }
     Text(
-        text = "${e.stage.label} · ${e.message}",
+        text = "+${e.elapsedMs / 1000}s · ${e.stage.label} · ${e.message}",
         style = MaterialTheme.typography.bodySmall,
         color = color,
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = {}, onLongClick = onLongClick),
     )
 }
 

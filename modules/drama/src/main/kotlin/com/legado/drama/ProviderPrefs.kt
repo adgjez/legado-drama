@@ -2,6 +2,7 @@ package com.legado.drama
 
 import android.content.Context
 import com.legado.drama.engine.queue.DefaultRateGate
+import com.legado.drama.engine.router.DeepSeekDefaults
 
 /**
  * drama 设置项（架构文档 §4.3 / T014 模式记忆）：
@@ -27,10 +28,16 @@ class ProviderPrefs(context: Context) {
         get() = sp.getString(KEY_LAST_MODE, "manual") ?: "manual"
         set(value) = sp.edit().putString(KEY_LAST_MODE, value).apply()
 
+    /** T014 Q4：当前生效文本模型 id（默认 deepseek-chat，随时互切） */
+    var activeTextModelId: String
+        get() = sp.getString(KEY_ACTIVE_TEXT_MODEL, DeepSeekDefaults.MODEL) ?: DeepSeekDefaults.MODEL
+        set(value) = sp.edit().putString(KEY_ACTIVE_TEXT_MODEL, value).apply()
+
     companion object {
         const val KEY_VIDEO_INTERVAL = "video_interval_ms"
         const val KEY_AGNES_BASE = "agnes_base_url"
         const val KEY_LAST_MODE = "last_mode"
+        const val KEY_ACTIVE_TEXT_MODEL = "active_text_model"
 
         /** Agnes 直连基址（S1 实测通过；决策 Q1 解除代理层） */
         const val DEFAULT_AGNES_BASE = "https://apihub.agnes-ai.com"

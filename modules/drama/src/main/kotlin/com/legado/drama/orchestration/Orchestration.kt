@@ -43,6 +43,8 @@ class DefaultRenderQueue(
     private val renderTaskDao: com.legado.drama.data.dao.RenderTaskDao,
     private val scope: CoroutineScope,
     private val filesDirProvider: () -> java.io.File = { java.io.File(".") },
+    /** keyframes 首尾帧解析：assetId → 渲染用 URI（data uri/本地文件），缺失返回 null 降级为单帧 */
+    private val assetUriResolver: (assetId: String) -> String? = { null },
 ) : RenderQueue {
 
     private val _state = MutableStateFlow(QueueSnapshot())
@@ -138,12 +140,15 @@ class DefaultRenderQueue(
             }
         }
         try {
+            // keyframes 双帧：资产真实 URI（data uri/本地文件）；缺失时降级单帧由 Provider 自行处理
+            val firstUri = shot.firstAssetIds.firstNotNullOfOrNull { assetUriResolver(it) }
+            val lastUri = shot.lastAssetIds.firstNotNullOfOrNull { assetUriResolver(it) }
             val taskId = videoProvider.submitVideo(
                 VideoSubmitRequest(
                     shotId = shot.shotId,
                     prompt = buildShotPrompt(shot),
-                    firstImageUri = shot.firstAssetIds.firstOrNull(),
-                    lastImageUri = shot.lastAssetIds.firstOrNull(),
+                    firstImageUri = firstUri,
+                    lastImageUri = lastUri,
                 ),
             )
             // ★ SUBMITTED + video_id 即刻落库（防重复付费）
@@ -274,8 +279,21 @@ class DefaultPipelineOrchestrator(
     }
 
     override suspend fun recoverOnBoot() {
-        // 进程重启恢复由 DefaultRenderQueue 的 load-or-merge 承担，
-        // 遍历 AI 全托管剧集找出未完成集（消费端知道如何续传）
+        // 进程重启恢复（架构文档 §7.3 恢复语义 + 零重复付费）：
+        // 扫描 render_tasks 中 SUBMITTED/PENDING 的剧集 → 续跑渲染队列。
+        // DefaultRenderQueue 消费端 load-or-merge 会把 SUBMITTED 的 video_id 重新入队 re-poll
+        // （绝不重新 submit）；COMPLETED 但文件缺失/size=0 重置 PENDING；FAILED/BLOCKED 保持权威态。
+        val episodes = episodeDao.listAll()
+        for (ep in episodes) {
+            val tasks = graph.db.renderTaskDao().listByEpisode(ep.episodeId)
+            val needsRecover = tasks.any {
+                it.state == com.legado.drama.engine.queue.ShotState.SUBMITTED.name ||
+                    it.state == com.legado.drama.engine.queue.ShotState.PENDING.name
+            }
+            if (needsRecover) {
+                graph.renderQueue.enqueueEpisode(ep.episodeId)
+            }
+        }
     }
 }
 

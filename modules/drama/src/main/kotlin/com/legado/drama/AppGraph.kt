@@ -3,6 +3,7 @@ package com.legado.drama
 import android.content.Context
 import com.legado.drama.data.DramaDatabase
 import com.legado.drama.data.RoomCheckpointStore
+import com.legado.drama.data.entity.ProviderConfigEntity
 import com.legado.drama.engine.gate.AssetGate
 import com.legado.drama.engine.gate.DefaultAssetGate
 import com.legado.drama.engine.gate.DefaultStoryboardGate
@@ -10,9 +11,11 @@ import com.legado.drama.engine.gate.StoryboardGate
 import com.legado.drama.engine.queue.CheckpointStore
 import com.legado.drama.engine.queue.DefaultRateGate
 import com.legado.drama.engine.queue.RateGate
+import com.legado.drama.engine.router.TextModelRouter
 import com.legado.drama.engine.security.KeyVault
 import com.legado.drama.provider.AgnesProvider
 import com.legado.drama.provider.OpenAiCompatTextProvider
+import com.legado.drama.router.TextModelRouterImpl
 import com.legado.drama.security.AndroidKeyVault
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -66,6 +69,7 @@ class AppGraph private constructor(context: Context) {
             renderTaskDao = db.renderTaskDao(),
             scope = scope,
             filesDirProvider = { appContext.filesDir },
+            assetUriResolver = { assetId -> assetUriCache[assetId] },
         ).also { q ->
             q.onShotCompleted = { /* 通知栏由 Service 观察快照，无需额外回调 */ }
             com.legado.drama.orchestration.StoryboardChecker.provider =
@@ -103,19 +107,42 @@ class AppGraph private constructor(context: Context) {
     /** 设置项快捷读取（架构文档 §4.3 / 版本目录），非法值兜底 */
     val providerPrefs: ProviderPrefs by lazy { ProviderPrefs(appContext) }
 
+    /** 文本模型路由（T014 §2.3 Q4：多模型并存、随时互切） */
+    val textRouter: TextModelRouter by lazy { TextModelRouterImpl(this) }
+
+    /** provider_configs 缓存（registeredTextModels 同步读；设置页保存后 refreshConfigs 刷新） */
+    @Volatile
+    private var configsCache: List<ProviderConfigEntity> = emptyList()
+
+    /** 刷新配置缓存（设置页保存/验证后调用） */
+    suspend fun refreshConfigs() {
+        configsCache = db.providerConfigDao().listByChannels(listOf("video", "text", "image"))
+    }
+
+    /** 文本模型连通状态：配置表 is_verified 优先，无配置时按 Key 掩码兜底 */
+    fun isTextProviderVerified(providerId: String): Boolean =
+        configsCache.firstOrNull { it.channel == "text" && it.providerId == providerId }?.isVerified
+            ?: keyVault.masked(providerId).isNotEmpty()
+
     /** 当前剧集所属项目的资产 ID 白名单（六铁律·资产真实绑定） */
     private var activeProjectId: String = ""
     /** 资产白名单缓存：StoryboardGate 构造签名是同步 lambda，故用缓存桥接 Room 挂起查询 */
     @Volatile
     private var assetIdsCache: Set<String> = emptySet()
+    /** 资产 id → 渲染用 URI（keyframes 首尾帧取真实文件/远程 data uri，架构文档 keyframes 双帧模式） */
+    @Volatile
+    private var assetUriCache: Map<String, String> = emptyMap()
 
     fun setActiveProject(projectId: String) {
         activeProjectId = projectId
         scope.launch {
-            assetIdsCache = if (projectId.isEmpty()) {
-                emptySet()
+            if (projectId.isEmpty()) {
+                assetIdsCache = emptySet()
+                assetUriCache = emptyMap()
             } else {
-                db.assetDao().listByProject(projectId).map { it.assetId }.toSet()
+                val assets = db.assetDao().listByProject(projectId)
+                assetIdsCache = assets.map { it.assetId }.toSet()
+                assetUriCache = assets.mapNotNull { a -> a.fileUri?.let { a.assetId to it } }.toMap()
             }
         }
     }
