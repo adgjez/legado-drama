@@ -6,7 +6,11 @@ import com.legado.drama.data.RoomCheckpointStore
 import com.legado.drama.data.entity.ProviderConfigEntity
 import com.legado.drama.engine.gate.AssetGate
 import com.legado.drama.engine.gate.DefaultAssetGate
+import com.legado.drama.engine.gate.DefaultEraDetector
+import com.legado.drama.engine.gate.DefaultFidelityGate
 import com.legado.drama.engine.gate.DefaultStoryboardGate
+import com.legado.drama.engine.gate.EraDetector
+import com.legado.drama.engine.gate.FidelityGate
 import com.legado.drama.engine.gate.StoryboardGate
 import com.legado.drama.engine.queue.CheckpointStore
 import com.legado.drama.engine.queue.DefaultRateGate
@@ -32,6 +36,28 @@ class AppGraph private constructor(context: Context) {
     val appContext: Context = context.applicationContext
     val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    /**
+     * 全局崩溃兜底（HANDOVER C4/CrashLog；P2-9 隐私修正：不写公共下载目录，
+     * 只写应用私有 files/crash/last_crash.txt，避免崩溃栈含敏感信息外泄）。
+     */
+    init {
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            runCatching {
+                val dir = java.io.File(context.filesDir, "crash").apply { mkdirs() }
+                val out = java.io.File(dir, "last_crash.txt")
+                out.writeText(
+                    buildString {
+                        appendLine("time=${System.currentTimeMillis()}")
+                        appendLine("thread=${thread.name}")
+                        appendLine(throwable.stackTraceToString())
+                    },
+                )
+            }
+            prev?.uncaughtException(thread, throwable)
+        }
+    }
+
     val db: DramaDatabase by lazy { DramaDatabase.build(appContext) }
 
     val rateGate: RateGate by lazy {
@@ -49,6 +75,12 @@ class AppGraph private constructor(context: Context) {
     val storyboardGate: StoryboardGate by lazy {
         DefaultStoryboardGate { assetIdsInProject() }
     }
+
+    /** 时代红线检测（P0-FIX F3：AI 模式自动断代，写入项目 style_preset） */
+    val eraDetector: EraDetector by lazy { DefaultEraDetector() }
+
+    /** 提交前忠实性闸门（HANDOVER §3.1 FidelityGate：单镜出队前复核台词/资产） */
+    val fidelityGate: FidelityGate by lazy { DefaultFidelityGate() }
 
     val agnesProvider: AgnesProvider by lazy {
         AgnesProvider(rateGate, keyVault, providerPrefs.agnesBaseUrl)
@@ -70,6 +102,8 @@ class AppGraph private constructor(context: Context) {
             scope = scope,
             filesDirProvider = { appContext.filesDir },
             assetUriResolver = { assetId -> assetUriCache[assetId] },
+            fidelityGate = fidelityGate,
+            assetIdsInProject = { assetIdsInProject() },
         ).also { q ->
             q.onShotCompleted = { /* 通知栏由 Service 观察快照，无需额外回调 */ }
             com.legado.drama.orchestration.StoryboardChecker.provider =

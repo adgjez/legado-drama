@@ -62,7 +62,7 @@ private enum class DramaTab(val label: String) {
 }
 
 /**
- * drama 根界面：双模式首页 + 底部导航。
+ * drama 根界面：双模式首页 + 底部导航 + 全局 AI 悬浮球（HANDOVER C2）。
  * 模式记忆（ProviderPrefs.lastMode，T014 Q7）：进入即恢复上次模式。
  */
 @Composable
@@ -72,9 +72,14 @@ fun DramaApp() {
     var tab by remember { mutableStateOf(DramaTab.HOME) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    // C2：全局 AI 悬浮球 + 聊天面板
+    var aiPanelOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
+        floatingActionButton = {
+            AiAssistantFloating(onClick = { aiPanelOpen = true })
+        },
         bottomBar = {
             NavigationBar {
                 for (t in DramaTab.entries) {
@@ -108,6 +113,10 @@ fun DramaApp() {
                 DramaTab.SETTINGS -> SettingsScreen(graph, snackbar, scope)
             }
         }
+    }
+    // AI 聊天面板（全屏覆盖，不占 NavigationBar）
+    if (aiPanelOpen) {
+        AiAssistantPanel(onDismiss = { aiPanelOpen = false })
     }
 }
 

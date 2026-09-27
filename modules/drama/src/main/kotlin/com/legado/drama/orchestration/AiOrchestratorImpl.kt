@@ -5,6 +5,8 @@ import com.legado.drama.data.entity.AssetEntity
 import com.legado.drama.data.entity.EpisodeEntity
 import com.legado.drama.data.entity.ProjectEntity
 import com.legado.drama.data.entity.ShotEntity
+import com.legado.drama.engine.gate.StylePreset
+import com.legado.drama.engine.gate.StylePresets
 import com.legado.drama.engine.model.AiStageFlags
 import com.legado.drama.engine.orchestrator.AiJsonParser
 import com.legado.drama.engine.orchestrator.AiOrchestrator
@@ -54,6 +56,9 @@ class DefaultAiOrchestrator(
 
     @Volatile private var running = false
     @Volatile private var sessionTextModelId: String = DeepSeekDefaults.MODEL
+
+    /** 本会话推断出的时代预设（P0-FIX F3：AI 模式自动断代，不再写死西汉） */
+    @Volatile private var sessionEra: StylePreset = StylePresets.MODERN
 
     override suspend fun run(
         scriptText: String,
@@ -122,11 +127,19 @@ class DefaultAiOrchestrator(
         emit(PipelineStage5.EXTRACT_ASSETS, 0, "读取剧本（${scriptText.length} 字）…")
         val projectId = UUID.randomUUID().toString()
         val projectName = "AI草稿-" + SimpleDateFormat("MMdd-HHmm", Locale.getDefault()).format(Date())
+        // 时代红线（P0-FIX F3）：LLM 优先断代、规则兜底；写入 style_preset 供图像阶段取约束
+        val providerForEra = runCatching { resolveTextProvider(modelId) }.getOrNull()
+        sessionEra = graph.eraDetector.detect(scriptText) { prompt ->
+            providerForEra?.chat(
+                ChatRequest(messages = listOf(ChatMessage("user", prompt)), model = modelId, maxTokens = 32),
+            )?.content ?: ""
+        }
+        emit(PipelineStage5.EXTRACT_ASSETS, 0, "时代推断：${sessionEra.label}（${sessionEra.eraKey}）")
         graph.db.projectDao().upsert(
             ProjectEntity(
                 projectId = projectId,
                 name = projectName,
-                stylePreset = "cinema",
+                stylePreset = sessionEra.eraKey,
                 episodePlan = 1,
                 budgetShots = DEFAULT_BUDGET_SHOTS,
                 createdAt = System.currentTimeMillis(),
@@ -201,6 +214,7 @@ class DefaultAiOrchestrator(
                 val uri = graph.agnesProvider.generateImage(
                     ImageGenRequest(
                         prompt = buildImagePrompt(asset),
+                        negativePrompt = sessionEra.eraNegative, // 时代红线负向（F3：现代剧禁古装/古代剧禁现代物）
                         width = 1024,
                         height = 1024,
                     ),
@@ -262,6 +276,7 @@ class DefaultAiOrchestrator(
                     graph.agnesProvider.generateImage(
                         ImageGenRequest(
                             prompt = buildImagePrompt(asset),
+                            negativePrompt = sessionEra.eraNegative,
                             width = 1024,
                             height = 1024,
                         ),
@@ -360,11 +375,12 @@ class DefaultAiOrchestrator(
 
     private fun buildImagePrompt(asset: AssetEntity): String {
         val desc = asset.prompt.removePrefix(AiJsonParser.prefixFor(asset.kind)).trim()
+        val era = sessionEra.eraPositive // 时代红线约束（P0-FIX F3）
         return when (asset.kind) {
-            "character" -> "角色立绘：$desc。二次元影视短剧风格，正面全身，清晰五官，电影级光影。"
-            "scene" -> "场景概念图：$desc。影视级场景，纵深透视，统一色调。"
-            "prop" -> "道具特写：$desc。纯色背景，产品级打光。"
-            else -> "画面：$desc。"
+            "character" -> "角色立绘：$desc。$era 二次元影视短剧风格，正面全身，清晰五官，电影级光影。"
+            "scene" -> "场景概念图：$desc。$era 影视级场景，纵深透视，统一色调。"
+            "prop" -> "道具特写：$desc。$era 纯色背景，产品级打光。"
+            else -> "画面：$desc。$era"
         } + " 16:9 构图"
     }
 

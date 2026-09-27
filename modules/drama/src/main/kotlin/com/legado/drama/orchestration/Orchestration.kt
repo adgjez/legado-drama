@@ -4,6 +4,7 @@ import com.legado.drama.AppGraph
 import com.legado.drama.data.entity.EpisodeEntity
 import com.legado.drama.data.entity.ShotEntity
 import com.legado.drama.engine.gate.BudgetGuard
+import com.legado.drama.engine.gate.FidelityGate
 import com.legado.drama.engine.gate.StoryboardReport
 import com.legado.drama.engine.gate.ValidationIssue
 import com.legado.drama.engine.model.ShotMeta
@@ -16,11 +17,13 @@ import com.legado.drama.engine.provider.ProviderError
 import com.legado.drama.engine.provider.VideoProvider
 import com.legado.drama.engine.provider.VideoSubmitRequest
 import com.legado.drama.engine.queue.CheckpointStore
+import com.legado.drama.engine.queue.PollPolicy
 import com.legado.drama.engine.queue.QueueSnapshot
 import com.legado.drama.engine.queue.RenderQueue
 import com.legado.drama.engine.queue.ShotState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
@@ -45,6 +48,10 @@ class DefaultRenderQueue(
     private val filesDirProvider: () -> java.io.File = { java.io.File(".") },
     /** keyframes 首尾帧解析：assetId → 渲染用 URI（data uri/本地文件），缺失返回 null 降级为单帧 */
     private val assetUriResolver: (assetId: String) -> String? = { null },
+    /** 提交前忠实性二次闸门（HANDOVER §3.1：单镜出队前复核台词/资产，fail-closed） */
+    private val fidelityGate: FidelityGate? = null,
+    /** 项目资产白名单（FidelityGate 资产原样复核用；空集表示未加载白名单则跳过资产项） */
+    private val assetIdsInProject: () -> Set<String> = { emptySet() },
 ) : RenderQueue {
 
     private val _state = MutableStateFlow(QueueSnapshot())
@@ -53,6 +60,9 @@ class DefaultRenderQueue(
     private var consumerJob: Job? = null
     @Volatile private var pausedReason: String? = null
     @Volatile private var currentEpisodeId: String? = null
+
+    /** 取回失败计数器：单消费者协程内访问，无需并发容器（P0-FIX F5） */
+    private val fetchFails = mutableMapOf<String, Int>()
 
     /** 单镜完成回调（通知栏/UI 使用） */
     var onShotCompleted: ((shotId: String) -> Unit)? = null
@@ -107,23 +117,51 @@ class DefaultRenderQueue(
             checkpoint.markFailed(shotId, "缺少 video_id")
             return
         }
-        try {
-            when (val r = videoProvider.pollResult(taskId)) {
-                is PollResult.Completed -> {
-                    val clipPath = persistClip(r.videoUrl, shotId)
-                    checkpoint.markCompleted(shotId, clipPath)
-                    onShotCompleted?.invoke(shotId)
+        // 自适应轮询（P0-FIX F10/HANDOVER F1）：submitted 后前 10 分钟每 30s，之后每 60s
+        val submittedAt = renderTaskDao.listByEpisode(episodeId)
+            .firstOrNull { it.shotId == shotId }?.submittedAt
+        var rounds = 0
+        while (rounds < MAX_POLL_ROUNDS) {
+            rounds++
+            try {
+                when (val r = videoProvider.pollResult(taskId)) {
+                    is PollResult.Completed -> {
+                        try {
+                            val clipPath = persistClip(r.videoUrl, shotId)
+                            checkpoint.markCompleted(shotId, clipPath)
+                            onShotCompleted?.invoke(shotId)
+                        } catch (fetch: Throwable) {
+                            // 取回失败计数（P0-FIX F5）：达上限本轮退出并保留 submitted，待断点续传再试
+                            val fails = (fetchFails[shotId] ?: 0) + 1
+                            fetchFails[shotId] = fails
+                            if (PollPolicy.shouldGiveUpAfterFetchFails(fails)) {
+                                _state.value = _state.value.copy(
+                                    lastMessage = "镜 $shotId 取回失败 ${PollPolicy.FETCH_RETRY_MAX} 次，保留已提交待续传",
+                                )
+                                return
+                            }
+                        }
+                        return
+                    }
+                    is PollResult.Failed -> {
+                        checkpoint.markFailed(shotId, r.reason)
+                        return
+                    }
+                    is PollResult.InProgress -> Unit // 按自适应间隔等待后重试
                 }
-                is PollResult.Failed -> checkpoint.markFailed(shotId, r.reason)
-                is PollResult.InProgress -> Unit // 保留 submitted，续传再轮询
+            } catch (e: ProviderError.AuthError) {
+                setPaused("auth")
+                return
+            } catch (e: ProviderError.QuotaError) {
+                setPaused("network")
+                return
+            } catch (_: Throwable) {
+                // 弱网：保留 submitted 态，留给断点续传
+                return
             }
-        } catch (e: ProviderError.AuthError) {
-            setPaused("auth")
-        } catch (e: ProviderError.QuotaError) {
-            setPaused("network")
-        } catch (_: Throwable) {
-            // 弱网：保留 submitted 态，留给断点续传
+            delay(PollPolicy.adaptivePollIntervalMs(submittedAt, System.currentTimeMillis()))
         }
+        // 轮询多轮仍 InProgress：保留 submitted，交给下次断点续传（不重复付费）
     }
 
     private suspend fun renderShot(shot: ShotMeta, episodeId: String, projectId: String) {
@@ -136,6 +174,19 @@ class DefaultRenderQueue(
                     .filter { it.level == ValidationIssue.Level.ERROR }
                     .joinToString(";") { "镜${it.shotNo} ${it.message}" }
                 checkpoint.markFailed(shot.shotId, "六铁律未过: $issueSummary")
+                return
+            }
+        }
+        // ★ 提交前忠实性二次闸门（HANDOVER §3.1 FidelityGate）：六铁律在分镜生成后校验，
+        // 此处单镜出队前再查台词逐字忠实 + 资产原样，防渲染期间剧本/资产漂移，fail-closed
+        fidelityGate?.let { gate ->
+            val fr = gate.checkShot(shot, script, assetIdsInProject)
+            if (!fr.passed) {
+                val issueSummary = fr.issues
+                    .filter { it.level == ValidationIssue.Level.ERROR }
+                    .joinToString(";") { "镜${it.shotNo} ${it.message}" }
+                checkpoint.markFailed(shot.shotId, "忠实性未过: $issueSummary")
+                refreshSnapshot(episodeId, shotsFromDao(episodeId), "镜 ${shot.shotNo} 忠实性复核未过，未提交")
                 return
             }
         }
@@ -235,6 +286,15 @@ class DefaultRenderQueue(
 
     override fun cancelShot(shotId: String) {
         scope.launch { checkpoint.markFailed(shotId, "用户取消") }
+    }
+
+    /** 供快照刷新取当前分镜（忠实性阻断后同步 UI） */
+    private suspend fun shotsFromDao(episodeId: String): List<ShotMeta> =
+        shotDao.listByEpisode(episodeId).map { it.toShotMeta() }
+
+    companion object {
+        /** 单镜单次入队最多轮询轮数：30s×2 + 60s×2 ≈ 3 分钟；未完成则保留 submitted 等断点续传 */
+        private const val MAX_POLL_ROUNDS = 4
     }
 }
 
