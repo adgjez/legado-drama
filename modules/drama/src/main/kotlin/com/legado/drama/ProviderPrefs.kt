@@ -3,11 +3,13 @@ package com.legado.drama
 import android.content.Context
 import com.legado.drama.engine.queue.DefaultRateGate
 import com.legado.drama.engine.router.DeepSeekDefaults
+import com.legado.drama.provider.AgnesRegion
 
 /**
  * drama 设置项（架构文档 §4.3 / T014 模式记忆）：
  * - 视频提交限速间隔（120s 默认，非法值兜底）
  * - Agnes 直连 base url（冒烟 S1 实测 apihub.agnes-ai.com）
+ * - Agnes 站点分池（INTERNATIONAL / CHINA，对齐源工程 SettingsPage）
  * - 首页模式记忆（T014 Q7 全局开关：ai / manual）
  */
 class ProviderPrefs(context: Context) {
@@ -23,6 +25,13 @@ class ProviderPrefs(context: Context) {
         get() = sp.getString(KEY_AGNES_BASE, DEFAULT_AGNES_BASE) ?: DEFAULT_AGNES_BASE
         set(value) = sp.edit().putString(KEY_AGNES_BASE, value).apply()
 
+    /** Agnes 站点分池（默认国际站；非法值兜底） */
+    var agnesRegion: AgnesRegion
+        get() = runCatching {
+            AgnesRegion.valueOf(sp.getString(KEY_AGNES_REGION, null) ?: AgnesRegion.INTERNATIONAL.name)
+        }.getOrDefault(AgnesRegion.INTERNATIONAL)
+        set(value) = sp.edit().putString(KEY_AGNES_REGION, value.name).apply()
+
     /** T014 Q7：模式记忆全局开关 */
     var lastMode: String
         get() = sp.getString(KEY_LAST_MODE, "manual") ?: "manual"
@@ -36,6 +45,7 @@ class ProviderPrefs(context: Context) {
     companion object {
         const val KEY_VIDEO_INTERVAL = "video_interval_ms"
         const val KEY_AGNES_BASE = "agnes_base_url"
+        const val KEY_AGNES_REGION = "agnes_region"
         const val KEY_LAST_MODE = "last_mode"
         const val KEY_ACTIVE_TEXT_MODEL = "active_text_model"
 

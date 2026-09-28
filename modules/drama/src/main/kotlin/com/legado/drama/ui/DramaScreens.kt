@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.legado.drama.AppGraph
+import com.legado.drama.ProviderPrefs
 import com.legado.drama.data.entity.FinishedFilmEntity
 import com.legado.drama.data.entity.ProviderConfigEntity
 import com.legado.drama.data.entity.RenderTaskEntity
@@ -48,6 +49,9 @@ import com.legado.drama.engine.assemble.MovieAssembler
 import com.legado.drama.engine.queue.QueueSnapshot
 import com.legado.drama.engine.queue.ShotState
 import com.legado.drama.provider.AgnesProvider
+import com.legado.drama.provider.AgnesRegion
+import com.legado.drama.provider.agnesScopedConfigId
+import com.legado.drama.ui.components.DramaFilterChip
 import com.legado.drama.service.RenderForegroundService
 import com.legado.drama.ui.components.DramaCard
 import com.legado.drama.ui.components.EmptyState
@@ -431,7 +435,21 @@ fun SettingsPage(graph: AppGraph) {
     var deepseekKey by remember { mutableStateOf("") }
     var interval by remember { mutableStateOf(graph.providerPrefs.videoIntervalMs.toString()) }
     var baseUrl by remember { mutableStateOf(graph.providerPrefs.agnesBaseUrl) }
+    var agnesRegion by remember { mutableStateOf(graph.providerPrefs.agnesRegion) }
     val configs by graph.db.providerConfigDao().observeAll().collectAsState(initial = emptyList())
+
+    /** 切换站点：持久化 + 热更新 provider + 默认基址联动（用户自定义基址不改写） */
+    fun switchAgnesRegion(target: AgnesRegion) {
+        if (target == agnesRegion) return
+        val custom = baseUrl != ProviderPrefs.DEFAULT_AGNES_BASE && baseUrl != AgnesProvider.CHINA_BASE_URL
+        agnesRegion = target
+        graph.providerPrefs.agnesRegion = target
+        graph.applyAgnesRegion(target)
+        if (!custom) {
+            baseUrl = if (target == AgnesRegion.CHINA) AgnesProvider.CHINA_BASE_URL else ProviderPrefs.DEFAULT_AGNES_BASE
+        }
+        snackbar.show("Agnes 站点已切换：${if (target == AgnesRegion.CHINA) "中国站" else "国际站"}（两站 Key 独立）")
+    }
 
     Column(
         Modifier
@@ -442,6 +460,33 @@ fun SettingsPage(graph: AppGraph) {
     ) {
             PageHeader(title = "设置", subtitle = "模型供应商 · Key 加密存储 · 渲染参数")
 
+            // ── Agnes 站点分池（对齐源工程 AgnesRegion 卡片：两站 Key 独立） ──
+            DramaCard(Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Agnes 站点", style = MaterialTheme.typography.titleMedium)
+                        Text("当前：${if (agnesRegion == AgnesRegion.CHINA) "中国站" else "国际站"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    }
+                    Text(
+                        "国际站（apihub.agnes-ai.com）与中国站（api.agnes-ai.cn）Key 相互独立、分开保存；切换站点后请确认该站已填写对应 Key。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DramaFilterChip(
+                            selected = agnesRegion == AgnesRegion.INTERNATIONAL,
+                            onClick = { switchAgnesRegion(AgnesRegion.INTERNATIONAL) },
+                            label = { Text("国际站") },
+                        )
+                        DramaFilterChip(
+                            selected = agnesRegion == AgnesRegion.CHINA,
+                            onClick = { switchAgnesRegion(AgnesRegion.CHINA) },
+                            label = { Text("中国站") },
+                        )
+                    }
+                }
+            }
+
             // ── 文本模型区块（T014 §2.3 Q4：DeepSeek/Agnes 双模型、随时互切） ──
             DramaCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -449,7 +494,7 @@ fun SettingsPage(graph: AppGraph) {
                         Text("文本模型（剧本/分镜大脑）", style = MaterialTheme.typography.titleMedium)
                         Text("生效：${graph.textRouter.activeTextModelId()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                     }
-                    val registered = remember { graph.textRouter.registeredTextModels() }
+                    val registered = remember(agnesRegion) { graph.textRouter.registeredTextModels() }
                     var activeModelId by remember { mutableStateOf(graph.textRouter.activeTextModelId()) }
                     registered.forEach { model ->
                         val selected = model.modelId == activeModelId
@@ -507,16 +552,18 @@ fun SettingsPage(graph: AppGraph) {
                                         snackbar.show("请先填写 ${model.label} 的 Key")
                                         return@launch
                                     }
-                                    graph.keyVault.save(model.providerId, model.providerId, key)
+                                    // Key 维度按站点分池（Agnes：国际站 agnes / 中国站 agnes-cn；DeepSeek 原样）
+                                    val scopedId = agnesScopedConfigId(model.providerId, graph.providerPrefs.agnesRegion)
+                                    graph.keyVault.save(scopedId, model.providerId, key)
                                     // 同步写 provider_configs（Agnes 需同时写 video 与 text 两行；DeepSeek 写 text 行）
                                     val now = System.currentTimeMillis()
                                     graph.db.providerConfigDao().upsert(
                                         ProviderConfigEntity(
-                                            configId = "${model.providerId}-text",
+                                            configId = "$scopedId-text",
                                             channel = "text",
                                             providerId = model.providerId,
                                             model = model.modelId,
-                                            keyMasked = graph.keyVault.masked(model.providerId),
+                                            keyMasked = graph.keyVault.masked(scopedId),
                                             isVerified = false,
                                             updatedAt = now,
                                         ),
@@ -524,11 +571,11 @@ fun SettingsPage(graph: AppGraph) {
                                     if (model.providerId == AgnesProvider.PROVIDER_ID) {
                                         graph.db.providerConfigDao().upsert(
                                             ProviderConfigEntity(
-                                                configId = "${model.providerId}-video",
+                                                configId = "$scopedId-video",
                                                 channel = "video",
                                                 providerId = model.providerId,
                                                 model = "video",
-                                                keyMasked = graph.keyVault.masked(model.providerId),
+                                                keyMasked = graph.keyVault.masked(scopedId),
                                                 isVerified = false,
                                                 updatedAt = now,
                                             ),
@@ -537,7 +584,7 @@ fun SettingsPage(graph: AppGraph) {
                                     graph.refreshConfigs()
                                     val r = graph.textRouter.validate(model.modelId)
                                     if (r.isSuccess) {
-                                        graph.db.providerConfigDao().get("${model.providerId}-text")?.let {
+                                        graph.db.providerConfigDao().get("$scopedId-text")?.let {
                                             graph.db.providerConfigDao().upsert(it.copy(isVerified = true))
                                         }
                                         graph.refreshConfigs()
@@ -549,10 +596,11 @@ fun SettingsPage(graph: AppGraph) {
                             }) { Text("保存并验证") }
                             OutlinedButton(onClick = {
                                 scope.launch {
-                                    graph.keyVault.delete(model.providerId)
-                                    graph.db.providerConfigDao().delete("${model.providerId}-text")
+                                    val scopedId = agnesScopedConfigId(model.providerId, graph.providerPrefs.agnesRegion)
+                                    graph.keyVault.delete(scopedId)
+                                    graph.db.providerConfigDao().delete("$scopedId-text")
                                     if (model.providerId == AgnesProvider.PROVIDER_ID) {
-                                        graph.db.providerConfigDao().delete("${model.providerId}-video")
+                                        graph.db.providerConfigDao().delete("$scopedId-video")
                                     }
                                     graph.refreshConfigs()
                                     snackbar.show("${model.label} Key 已清除")

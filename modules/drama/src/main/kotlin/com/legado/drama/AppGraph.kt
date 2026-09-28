@@ -18,7 +18,9 @@ import com.legado.drama.engine.queue.RateGate
 import com.legado.drama.engine.router.TextModelRouter
 import com.legado.drama.engine.security.KeyVault
 import com.legado.drama.provider.AgnesProvider
+import com.legado.drama.provider.AgnesRegion
 import com.legado.drama.provider.OpenAiCompatTextProvider
+import com.legado.drama.provider.agnesScopedConfigId
 import com.legado.drama.router.TextModelRouterImpl
 import com.legado.drama.security.AndroidKeyVault
 import kotlinx.coroutines.CoroutineScope
@@ -83,7 +85,7 @@ class AppGraph private constructor(context: Context) {
     val fidelityGate: FidelityGate by lazy { DefaultFidelityGate() }
 
     val agnesProvider: AgnesProvider by lazy {
-        AgnesProvider(rateGate, keyVault, providerPrefs.agnesBaseUrl)
+        AgnesProvider(rateGate, keyVault, providerPrefs.agnesBaseUrl, providerPrefs.agnesRegion)
     }
 
     val openAiTextProvider: OpenAiCompatTextProvider by lazy {
@@ -153,10 +155,20 @@ class AppGraph private constructor(context: Context) {
         configsCache = db.providerConfigDao().listByChannels(listOf("video", "text", "image"))
     }
 
-    /** 文本模型连通状态：配置表 is_verified 优先，无配置时按 Key 掩码兜底 */
+    /** 文本模型连通状态：配置表 is_verified 优先，无配置时按 Key 掩码兜底（Agnes 按站点分池） */
     fun isTextProviderVerified(providerId: String): Boolean =
         configsCache.firstOrNull { it.channel == "text" && it.providerId == providerId }?.isVerified
-            ?: keyVault.masked(providerId).isNotEmpty()
+            ?: keyVault.masked(agnesScopedConfigId(providerId, providerPrefs.agnesRegion)).isNotEmpty()
+
+    /**
+     * 切换 Agnes 站点（对齐源工程 AppGraph.applyAgnesRegion/rebuilAgnes）：
+     * 更新持久化 region + 热更新 provider 实例的 region（Key 维度与基址随即分池生效），
+     * 无需重建 provider（renderQueue 等持有同一实例引用）。
+     */
+    fun applyAgnesRegion(region: AgnesRegion) {
+        providerPrefs.agnesRegion = region
+        agnesProvider.region = region
+    }
 
     /** 当前剧集所属项目的资产 ID 白名单（六铁律·资产真实绑定） */
     private var activeProjectId: String = ""

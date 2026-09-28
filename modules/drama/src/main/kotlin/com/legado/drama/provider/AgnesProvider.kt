@@ -40,7 +40,8 @@ import kotlinx.serialization.json.Json
 
 /**
  * Agnes 三通道 Provider（架构文档 §1.2 Q1/Q6/Q9 + §4.1 + 决策 S1 实测）：
- * - 直连 apihub.agnes-ai.com（S1 冒烟已通过，无代理层）
+ * - 直连 apihub.agnes-ai.com（S1 冒烟已通过，无代理层）；中国站走 api.agnes-ai.cn
+ * - 站点分池（对齐源工程 AgnesRegion）：国际站/中国站 Key 独立，见 agnesScopedConfigId()
  * - Video：提交前先过速率门 → keyframes 双帧 + generate_audio + 中文配音指令
  * - 429 长退避（base 30s cap 180s ≤3 次）；5xx 指数退避（2s×2^n ≤3 次）
  * - 参数前置校验（帧数 8n+1、尺寸 64 倍数、fps 1..60）
@@ -50,6 +51,7 @@ class AgnesProvider(
     private val rateGate: RateGate,
     private val keyVault: KeyVault,
     private val baseUrl: String,
+    @Volatile var region: AgnesRegion = AgnesRegion.INTERNATIONAL,
 ) : VideoProvider, TextProvider, ImageProvider {
 
     override val id: String = PROVIDER_ID
@@ -66,13 +68,21 @@ class AgnesProvider(
         expectSuccess = false // 手动处理状态码以分类错误
     }
 
-    private val configIdKey: String get() = "agnes"
+    /** Key 维度按站点分池：国际站 "agnes"，中国站 "agnes-cn" */
+    private val configIdKey: String get() = agnesScopedConfigId(PROVIDER_ID, region)
+
+    /**
+     * 生效基址：中国站且 baseUrl 仍为国际站默认值（用户未自定义）→ 切中国站根域；
+     * 其余（用户自定义 / 国际站）尊重配置。legado 根域语义不带 /v1，路径由调用处拼接。
+     */
+    private val effectiveBaseUrl: String
+        get() = if (region == AgnesRegion.CHINA && baseUrl == DEFAULT_BASE) CHINA_BASE_URL else baseUrl
 
     override suspend fun validateKey(key: String): Result<ConnectionInfo> {
         return runCatching {
             // 最小成本连通：GET 根/健康检查；失败按 401/429 分类
             val resp = withRetry429 {
-                client.get("$baseUrl/") { auth(key) }
+                client.get("$effectiveBaseUrl/") { auth(key) }
             }
             ConnectionInfo(
                 ok = resp.status.value < 500,
@@ -85,12 +95,12 @@ class AgnesProvider(
     override fun listModels(): List<ModelSpec> = listOf(
         ModelSpec(
             id = DEFAULT_VIDEO_MODEL, label = "Agnes 视频 2.5 Flash",
-            providerId = PROVIDER_ID, baseUrl = baseUrl,
+            providerId = PROVIDER_ID, baseUrl = effectiveBaseUrl,
             supportsKeyframes = true, supportsAudio = true,
         ),
         ModelSpec(
             id = TEXT_MODEL, label = "Agnes 文本 2.5 Flash",
-            providerId = PROVIDER_ID, baseUrl = baseUrl,
+            providerId = PROVIDER_ID, baseUrl = effectiveBaseUrl,
         ),
     )
 
@@ -118,7 +128,7 @@ class AgnesProvider(
             mode = if (req.firstImageUri != null && req.lastImageUri != null) "keyframes" else null,
         )
         val resp = withRetry429 {
-            client.post("$baseUrl/videos") {
+            client.post("$effectiveBaseUrl/videos") {
                 auth(key)
                 contentType(ContentType.Application.Json)
                 setBody(body)
@@ -142,7 +152,7 @@ class AgnesProvider(
         val key = keyVault.load(configIdKey)
         if (key.isBlank()) throw ProviderError.AuthError("未配置 Agnes Key")
         val resp = withRetry429 {
-            client.get("$baseUrl/agnesapi") {
+            client.get("$effectiveBaseUrl/agnesapi") {
                 auth(key)
                 parameter("video_id", providerTaskId)
             }
@@ -166,7 +176,7 @@ class AgnesProvider(
         val key = keyVault.load(configIdKey)
         if (key.isBlank()) throw ProviderError.AuthError("未配置 Agnes Key")
         val resp = withRetry429 {
-            client.post("$baseUrl/v1/chat/completions") {
+            client.post("$effectiveBaseUrl/v1/chat/completions") {
                 auth(key)
                 contentType(ContentType.Application.Json)
                 setBody(
@@ -197,7 +207,7 @@ class AgnesProvider(
         val key = keyVault.load(configIdKey)
         if (key.isBlank()) throw ProviderError.AuthError("未配置 Agnes Key")
         val resp = withRetry429 {
-            client.post("$baseUrl/images/generations") {
+            client.post("$effectiveBaseUrl/images/generations") {
                 auth(key)
                 contentType(ContentType.Application.Json)
                 setBody(
@@ -272,6 +282,12 @@ class AgnesProvider(
         const val TEXT_MODEL = "agnes-2.5-flash"
         const val MAX_QUOTA_RETRY = 3
         const val MAX_5XX_RETRY = 3
+
+        /** 国际站默认基址（根域语义；决策 S1 实测 apihub.agnes-ai.com） */
+        const val DEFAULT_BASE = "https://apihub.agnes-ai.com"
+
+        /** 中国站根域（legado 根域风格不带 /v1，路径由调用处拼接） */
+        const val CHINA_BASE_URL = "https://api.agnes-ai.cn"
     }
 }
 
