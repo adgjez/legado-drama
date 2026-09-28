@@ -60,6 +60,8 @@ class DefaultRenderQueue(
     private var consumerJob: Job? = null
     @Volatile private var pausedReason: String? = null
     @Volatile private var currentEpisodeId: String? = null
+    /** P1-5 对齐源工程：用户对 budget 确认放行后，越过预算门提交一次（提交即复位） */
+    @Volatile private var budgetConfirmed = false
 
     /** 取回失败计数器：单消费者协程内访问，无需并发容器（P0-FIX F5） */
     private val fetchFails = mutableMapOf<String, Int>()
@@ -97,19 +99,27 @@ class DefaultRenderQueue(
         // ③ 先轮询已提交（绝不重复 submit，防重复付费）
         for (entry in cp.toRePoll) {
             repoll(entry.shotId, entry.providerTaskId.orEmpty(), entry.episodeId.ifEmpty { episodeId })
+            // P1-5：repoll 内 auth/network 暂停后立即终止本轮循环，
+            // 防止末尾 setPaused(null) 覆盖暂停状态（最后一镜场景）
+            if (pausedReason != null) return
         }
         // ④ 渲染 pending
         for (shot in shots.filter { it.shotId in cp.pendingIds }) {
             if (!scope.isActive) return
             pausedReason?.let { return }
-            if (!budget.canSubmit(projectId)) {
+            if (!budget.canSubmit(projectId) && !budgetConfirmed) {
                 setPaused("budget")
                 return
             }
             renderShot(shot, episodeId, projectId)
+            // P1-5：renderShot 内 auth/network 暂停后同样立即终止，
+            // 否则最后一镜结束后 setPaused(null) 会把暂停清掉（恢复入口丢失）
+            if (pausedReason != null) return
         }
-        setPaused(null)
-        refreshSnapshot(episodeId, shots, "全部镜渲染完成")
+        if (pausedReason == null) {
+            setPaused(null)
+            refreshSnapshot(episodeId, shots, "全部镜渲染完成")
+        }
     }
 
     private suspend fun repoll(shotId: String, taskId: String, episodeId: String) {
@@ -205,6 +215,8 @@ class DefaultRenderQueue(
             // ★ SUBMITTED + video_id 即刻落库（防重复付费）
             checkpoint.markSubmitted(shot.shotId, taskId)
             budget.consumeSubmitted(projectId)
+            // P1-5：确认放行只对下一镜有效（一次性），提交后即复位防无限越权
+            budgetConfirmed = false
             repoll(shot.shotId, taskId, episodeId)
         } catch (e: ProviderError.AuthError) {
             checkpoint.markFailed(shot.shotId, "Key 无效")
@@ -279,7 +291,12 @@ class DefaultRenderQueue(
     }
 
     override suspend fun resume(confirmedByUser: Boolean) {
-        if (pausedReason == "budget" && !confirmedByUser) return
+        // P1-5 对齐源工程（budget_exceeded 语义）：预算暂停必须用户显式确认才放行
+        if (pausedReason == "budget") {
+            if (!confirmedByUser) return
+            // 确认放行 → 允许越过预算门提交一次（防确认后再次被 canSubmit 拦回成死循环）
+            budgetConfirmed = true
+        }
         pausedReason = null
         currentEpisodeId?.let { enqueueEpisode(it) }
     }

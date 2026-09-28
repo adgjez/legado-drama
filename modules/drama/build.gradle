@@ -84,4 +84,8 @@ dependencies {
     implementation(libs.media3.ui)
     implementation(libs.core.ktx)
     implementation(libs.androidx.annotation)
+
+    // 渲染暂停/恢复路径 JVM 实测（DefaultRenderQueue 依赖均为接口，fake 后可本地跑）
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }
