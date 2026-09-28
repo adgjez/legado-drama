@@ -58,6 +58,9 @@ interface AssetDao {
 
     @Query("UPDATE assets SET review_state = :state WHERE asset_id IN (:assetIds)")
     suspend fun updateReviewState(assetIds: List<String>, state: String)
+
+    @Query("UPDATE assets SET reference_image_uri = :uri, updated_at = :updatedAt WHERE asset_id = :assetId")
+    suspend fun setReferenceImage(assetId: String, uri: String?, updatedAt: Long)
 }
 
 /** 剧集 */

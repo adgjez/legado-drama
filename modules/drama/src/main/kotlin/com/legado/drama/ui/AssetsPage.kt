@@ -31,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -203,6 +204,28 @@ fun AssetsPage(
     // 资产点击预览：有 fileUri/remoteUrl（本地或已生成）时弹大图
     fun previewTarget(a: AssetEntity): String? = a.fileUri ?: a.remoteUrl
 
+    /**
+     * 图生图参考图（i2i）接线：资产可挂一张参考图（本地上传资产 fileUri 或相册新选图），
+     * 重生成/审计重试时编排层将其作为 referenceUri（input_image）传入图像通道。
+     * refTargetId 非空 → 弹「选择参考图来源」对话框（本地资产 或 相册选图）。
+     */
+    var refTargetId by remember { mutableStateOf<String?>(null) }
+    val refImageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        val targetId = refTargetId
+        refTargetId = null
+        if (uri != null && targetId != null) {
+            uploadScope.launch {
+                val internal = AssetFiles.copyToInternal(ctx, uri, isVideo = false)
+                if (internal == null) {
+                    captureError = "参考图读取失败（可能已无读权限）"
+                    return@launch
+                }
+                graph.db.assetDao().setReferenceImage(targetId, internal, System.currentTimeMillis())
+                snackbar.show("参考图已设置，重生成时将作为图生图参考")
+            }
+        }
+    }
+
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -354,6 +377,28 @@ fun AssetsPage(
                                 snackbar.show("${a.assetId.takeLast(6)} 标记重生成")
                             }
                         }, enabled = a.reviewState != "regen") { Text("重生成") }
+                        OutlinedButton(onClick = { refTargetId = a.assetId }) {
+                            Text(if (a.referenceImageUri != null) "更换参考图" else "设参考图")
+                        }
+                    }
+                    if (a.referenceImageUri != null) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "已挂参考图 ✓",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.tertiary,
+                            )
+                            TextButton(onClick = {
+                                scope.launch {
+                                    graph.db.assetDao().setReferenceImage(a.assetId, null, System.currentTimeMillis())
+                                    snackbar.show("参考图已清除")
+                                }
+                            }) { Text("清除", style = MaterialTheme.typography.labelSmall) }
+                        }
                     }
                 }
             }
@@ -371,28 +416,88 @@ fun AssetsPage(
             },
             title = { Text(kindLabel(pa.kind)) },
             text = {
-                when {
-                    model == null -> Text("该资产暂无预览图", color = MaterialTheme.colorScheme.outline)
-                    isVideo -> Column {
-                        Text(pa.prompt.take(48), style = MaterialTheme.typography.bodyMedium)
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "视频资产：${model.substringAfterLast('/')}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // 已挂参考图：预览中同时展示参考图（本地资产预览 + i2i 确认）
+                    if (pa.referenceImageUri != null) {
+                        Text("参考图（i2i）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
+                        GlideImage(
+                            model = pa.referenceImageUri,
+                            contentDescription = "参考图",
+                            modifier = Modifier.fillMaxWidth().height(96.dp),
+                            contentScale = ContentScale.Fit,
+                            loading = placeholder {},
+                            failure = placeholder { Text("参考图加载失败", color = MaterialTheme.colorScheme.error) },
                         )
                     }
-                    else -> GlideImage(
-                        model = model,
-                        contentDescription = pa.prompt,
-                        modifier = Modifier.fillMaxWidth().height(320.dp),
-                        contentScale = ContentScale.Fit,
-                        loading = placeholder {},
-                        failure = placeholder {
-                            Text("图片加载失败", color = MaterialTheme.colorScheme.error)
-                        },
-                    )
+                    when {
+                        model == null -> Text("该资产暂无预览图", color = MaterialTheme.colorScheme.outline)
+                        isVideo -> Column {
+                            Text(pa.prompt.take(48), style = MaterialTheme.typography.bodyMedium)
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "视频资产：${model.substringAfterLast('/')}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                        else -> GlideImage(
+                            model = model,
+                            contentDescription = pa.prompt,
+                            modifier = Modifier.fillMaxWidth().height(320.dp),
+                            contentScale = ContentScale.Fit,
+                            loading = placeholder {},
+                            failure = placeholder {
+                                Text("图片加载失败", color = MaterialTheme.colorScheme.error)
+                            },
+                        )
+                    }
                 }
+            },
+        )
+    }
+
+    // ---- 参考图来源选择：从本地上传资产（fileUri）选一张，或相册新选 ----
+    refTargetId?.let { targetId ->
+        val target = assets.firstOrNull { it.assetId == targetId }
+        // 本地上传资产（有 fileUri 的图片）可直接作为参考图来源
+        val localPicks = assets.filter { it.fileUri != null && !it.fileUri!!.endsWith(".mp4") && it.assetId != targetId }
+        AlertDialog(
+            onDismissRequest = { refTargetId = null },
+            title = { Text("设置参考图（图生图 i2i）") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "目标：${target?.prompt?.take(20) ?: targetId.takeLast(8)}（重生成时作为 input_image 参考）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                    if (localPicks.isNotEmpty()) {
+                        Text("从本地上传资产选择：", style = MaterialTheme.typography.labelMedium)
+                        // 最多展示 4 个，避免 Dialog 过高
+                        localPicks.take(4).forEach { pick ->
+                            OutlinedButton(
+                                onClick = {
+                                    refTargetId = null
+                                    scope.launch {
+                                        graph.db.assetDao().setReferenceImage(targetId, pick.fileUri, System.currentTimeMillis())
+                                        snackbar.show("已将「${pick.prompt.take(12)}」设为参考图")
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(pick.prompt.take(24), style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    } else {
+                        Text("暂无本地上传图片资产，可从相册直接选图。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                    }
+                }
+            },
+            confirmButton = {
+                OutlinedButton(onClick = { refImageLauncher.launch("image/*") }) { Text("从相册选图") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { refTargetId = null }) { Text("取消") }
             },
         )
     }

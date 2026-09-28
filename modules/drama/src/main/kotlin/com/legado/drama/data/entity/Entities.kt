@@ -29,6 +29,7 @@ data class AssetEntity(
     @ColumnInfo(name = "prompt") val prompt: String,
     @ColumnInfo(name = "file_uri") val fileUri: String? = null,
     @ColumnInfo(name = "remote_url") val remoteUrl: String? = null,
+    @ColumnInfo(name = "reference_image_uri") val referenceImageUri: String? = null, // 图生图参考图（i2i input_image）
     @ColumnInfo(name = "g1_state") val g1State: String = "none",     // none/pass/rejected
     @ColumnInfo(name = "g2_score") val g2Score: Double? = null,
     @ColumnInfo(name = "g2_defects") val g2Defects: String? = null,

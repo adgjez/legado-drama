@@ -217,6 +217,7 @@ class DefaultAiOrchestrator(
                         negativePrompt = sessionEra.eraNegative, // 时代红线负向（F3：现代剧禁古装/古代剧禁现代物）
                         width = 1024,
                         height = 1024,
+                        referenceUri = asset.referenceImageUri, // 图生图参考图（i2i）——资产挂参考图时作为 input_image 传入
                     ),
                 )
                 okCount++
@@ -279,6 +280,7 @@ class DefaultAiOrchestrator(
                             negativePrompt = sessionEra.eraNegative,
                             width = 1024,
                             height = 1024,
+                            referenceUri = asset.referenceImageUri, // G2 重试同样带参考图（i2i）
                         ),
                     )
                 }.onSuccess { uri ->
