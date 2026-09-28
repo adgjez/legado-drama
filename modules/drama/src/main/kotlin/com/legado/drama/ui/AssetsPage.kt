@@ -1,6 +1,12 @@
 package com.legado.drama.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +23,10 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -32,8 +42,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
 import com.bumptech.glide.integration.compose.placeholder
@@ -43,6 +56,7 @@ import com.legado.drama.ui.components.DramaCard
 import com.legado.drama.ui.components.DramaFilterChip
 import com.legado.drama.ui.components.EmptyState
 import com.legado.drama.ui.components.HeroButton
+import com.legado.drama.ui.components.IconActionButton
 import com.legado.drama.ui.components.LocalDramaSnackbar
 import com.legado.drama.ui.components.PageHeader
 import com.legado.drama.ui.components.PrimaryButton
@@ -50,12 +64,17 @@ import com.legado.drama.ui.components.statusErr
 import com.legado.drama.ui.components.statusInfo
 import com.legado.drama.ui.components.statusOk
 import kotlinx.coroutines.launch
+import java.io.File
+
+/** 拍摄类型（决定权限请求后启动哪个相机 Launcher） */
+private enum class CaptureKind { IMAGE }
 
 /** 资产 kind → 中文标签（对齐源工程资产类型筛选） */
 private fun kindLabel(kind: String): String = when (kind) {
     "character" -> "角色"
     "scene" -> "场景"
     "prop" -> "道具"
+    "local" -> "本地"
     else -> kind
 }
 
@@ -100,6 +119,89 @@ fun AssetsPage(
 
     val keptCount = assets.count { it.reviewState == "keep" }
     val allKept = assets.isNotEmpty() && assets.all { it.reviewState == "keep" }
+
+    // ---- 本地上传（对齐源工程第六轮：拍摄/相册图/相册视频 + copyToInternal 稳定落盘） ----
+    val ctx = LocalContext.current
+    val uploadScope = rememberCoroutineScope()
+    var pendingCaptureUri by remember { mutableStateOf<Uri?>(null) }
+    var captureError by remember { mutableStateOf<String?>(null) }
+    var previewAsset by remember { mutableStateOf<AssetEntity?>(null) }   // 资产卡点击预览（本地资产）
+
+    /** 拍摄输出 URI：cacheDir/capture/（宿主 file_paths 已暴露 cache 根路径） */
+    fun captureUri(): Uri {
+        val dir = File(ctx.cacheDir, "capture").apply { mkdirs() }
+        val f = File(dir, "cap_${System.currentTimeMillis()}.jpg")
+        return FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileProvider", f)
+    }
+
+    /** 拍摄成功/相册选择后：拷贝到 filesDir/uploads/ 再落库（content:// 权限仅在回调内有效） */
+    fun uploadVia(uri: Uri, kind: String, prompt: String, isVideo: Boolean) {
+        uploadScope.launch {
+            val internal = AssetFiles.copyToInternal(ctx, uri, isVideo = isVideo)
+            if (internal == null) {
+                captureError = if (isVideo) "视频读取失败（可能已无读权限）" else "图片读取失败（可能已无读权限）"
+                return@launch
+            }
+            graph.db.assetDao().upsert(
+                AssetEntity(
+                    assetId = "local_${System.currentTimeMillis()}_${uri.hashCode()}",
+                    projectId = project.projectId,
+                    kind = "local",
+                    prompt = prompt,
+                    fileUri = internal,
+                    updatedAt = System.currentTimeMillis(),
+                ),
+            )
+            snackbar.show("已上传本地$kind")
+        }
+    }
+
+    // 拍摄图片：TakePicture 回调 Boolean，仅 success=true 才落库（空文件/取消不入库）
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture(),
+    ) { success ->
+        val u = pendingCaptureUri
+        pendingCaptureUri = null
+        if (success && u != null) {
+            uploadVia(u, "图片", "拍摄图片", isVideo = false)
+        } else {
+            captureError = "已取消拍摄或拍摄失败"
+        }
+    }
+    // 拍摄权限请求：target 34+ 未授权直接启动相机会抛 SecurityException
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            val u = captureUri()
+            pendingCaptureUri = u
+            cameraLauncher.launch(u)
+        } else {
+            captureError = "拍摄需要相机权限，请在系统设置中授予「相机」权限后重试"
+        }
+    }
+    // 相册图片 / 相册视频（GetContent 免存储权限）
+    val albumImageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { uploadVia(it, "图片", "相册图片", isVideo = false) }
+    }
+    val albumVideoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { uploadVia(it, "视频", "相册视频", isVideo = true) }
+    }
+
+    fun startCapture() {
+        captureError = null
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        } else {
+            val u = captureUri()
+            pendingCaptureUri = u
+            runCatching { cameraLauncher.launch(u) }
+                .onFailure { captureError = "无法启动相机：${it.message ?: it.javaClass.simpleName}" }
+        }
+    }
+
+    // 资产点击预览：有 fileUri/remoteUrl（本地或已生成）时弹大图
+    fun previewTarget(a: AssetEntity): String? = a.fileUri ?: a.remoteUrl
 
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
@@ -153,6 +255,38 @@ fun AssetsPage(
                 }
             }
         }
+
+        // ---- 本地上传入口（对齐源工程第六轮：拍摄/相册图/相册视频） ----
+        item(span = { GridItemSpan(2) }) {
+            DramaCard(Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("本地上传", style = MaterialTheme.typography.titleMedium)
+                    captureError?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        IconActionButton(
+                            label = "拍摄图片",
+                            icon = Icons.Filled.PhotoCamera,
+                            onClick = { startCapture() },
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconActionButton(
+                            label = "相册图片",
+                            icon = Icons.Filled.PhotoLibrary,
+                            onClick = { albumImageLauncher.launch("image/*") },
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconActionButton(
+                            label = "相册视频",
+                            icon = Icons.Filled.VideoLibrary,
+                            onClick = { albumVideoLauncher.launch("video/*") },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        }
         if (assets.isEmpty()) {
             item(span = { GridItemSpan(2) }) {
                 EmptyState(
@@ -170,7 +304,8 @@ fun AssetsPage(
                     if (thumbModel != null) {
                         Box(
                             modifier = Modifier.fillMaxWidth().height(92.dp)
-                                .background(MaterialTheme.colorScheme.surfaceContainerLow),
+                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                .clickable { previewAsset = a },
                             contentAlignment = Alignment.Center,
                         ) {
                             GlideImage(
@@ -223,5 +358,42 @@ fun AssetsPage(
                 }
             }
         }
+    }
+
+    // ---- 资产大图预览：点击缩略图弹出（本地 fileUri / 已生成 remoteUrl），视频资产仅展示信息 ----
+    previewAsset?.let { pa ->
+        val model = pa.fileUri ?: pa.remoteUrl
+        val isVideo = model?.substringAfterLast('.', "")?.lowercase() in setOf("mp4", "webm", "mkv", "mov", "3gp", "avi")
+        AlertDialog(
+            onDismissRequest = { previewAsset = null },
+            confirmButton = {
+                OutlinedButton(onClick = { previewAsset = null }) { Text("关闭") }
+            },
+            title = { Text(kindLabel(pa.kind)) },
+            text = {
+                when {
+                    model == null -> Text("该资产暂无预览图", color = MaterialTheme.colorScheme.outline)
+                    isVideo -> Column {
+                        Text(pa.prompt.take(48), style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "视频资产：${model.substringAfterLast('/')}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                    else -> GlideImage(
+                        model = model,
+                        contentDescription = pa.prompt,
+                        modifier = Modifier.fillMaxWidth().height(320.dp),
+                        contentScale = ContentScale.Fit,
+                        loading = placeholder {},
+                        failure = placeholder {
+                            Text("图片加载失败", color = MaterialTheme.colorScheme.error)
+                        },
+                    )
+                }
+            },
+        )
     }
 }

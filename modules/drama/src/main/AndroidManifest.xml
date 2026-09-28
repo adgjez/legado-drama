@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 本地上传：拍摄入口需要相机（相册走 GetContent / Photo Picker，免权限） -->
+    <uses-permission android:name="android.permission.CAMERA" />
 
     <application>
         <!-- AI 短剧工坊入口：由阅读器「我的」页跳转 -->
