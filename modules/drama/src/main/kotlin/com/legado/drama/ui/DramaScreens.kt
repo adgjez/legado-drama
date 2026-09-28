@@ -109,6 +109,7 @@ private fun QueueBody(
     scope: kotlinx.coroutines.CoroutineScope,
 ) {
     val snackbar = LocalDramaSnackbar.current
+    var budgetConfirm by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         PageHeader(title = "渲染队列", subtitle = "镜头状态机实时刷新 · 可暂停/恢复")
 
@@ -142,12 +143,23 @@ private fun QueueBody(
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PrimaryButton(
-                        text = "开始/恢复渲染",
+                        text = if (snapshot.pausedReason != null) "恢复渲染" else "开始渲染",
                         onClick = {
-                            val ep = snapshot.episodeId
-                            if (ep != null) {
-                                RenderForegroundService.start(graph.appContext, ep)
-                                snackbar.show("渲染服务已启动")
+                            val reason = snapshot.pausedReason
+                            if (reason == null) {
+                                val ep = snapshot.episodeId
+                                if (ep != null) {
+                                    RenderForegroundService.start(graph.appContext, ep)
+                                    snackbar.show("渲染服务已启动")
+                                }
+                            } else if (reason == "budget") {
+                                // 预算达上限：必须显式确认放行（引擎 resume(confirmedByUser=true)）
+                                budgetConfirm = true
+                            } else {
+                                graph.scope.launch {
+                                    graph.renderQueue.resume(confirmedByUser = false)
+                                    snackbar.show("已恢复渲染")
+                                }
                             }
                         },
                         enabled = snapshot.episodeId != null,
@@ -158,6 +170,27 @@ private fun QueueBody(
                     }, enabled = snapshot.total > 0) { Text("暂停") }
                 }
             }
+        }
+
+        // ---- 预算达标上限确认弹窗（对齐源工程预算确认放行位语义） ----
+        if (budgetConfirm) {
+            AlertDialog(
+                onDismissRequest = { budgetConfirm = false },
+                title = { Text("预算已达上限") },
+                text = { Text("已暂停：预算达上限，等待确认。继续渲染将超出预设上限并产生额外费用。\n\n确认继续吗？") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        graph.scope.launch {
+                            graph.renderQueue.resume(confirmedByUser = true)
+                            snackbar.show("已确认超限放行，恢复渲染")
+                        }
+                        budgetConfirm = false
+                    }) { Text("继续渲染（超限放行）") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { budgetConfirm = false }) { Text("暂不渲染") }
+                },
+            )
         }
 
         if (tasks.isEmpty()) {
@@ -182,6 +215,13 @@ private fun QueueBody(
                             t.blockedReason?.let {
                                 Text("阻塞：$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
                             }
+                            // 单镜取消（对齐源工程 QueuePage 取消按钮，cancelShot 终止该镜）
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = {
+                                    graph.renderQueue.cancelShot(t.shotId)
+                                    snackbar.show("镜 ${t.shotId.takeLast(4)} 已取消")
+                                }) { Text("取消") }
+                            }
                         }
                     }
                 }
@@ -191,9 +231,11 @@ private fun QueueBody(
 }
 
 private fun pauseLabel(reason: String): String = when (reason) {
-    "budget" -> "预算超限"
+    "budget" -> "预算达上限，等待确认"
     "network" -> "网络异常"
-    "auth" -> "Key 认证失败"
+    "auth" -> "API Key 失效，请到设置页更新"
+    "review" -> "资产评审未通过"
+    "noshots" -> "本集没有分镜"
     else -> reason
 }
 
@@ -553,8 +595,29 @@ fun SettingsPage(graph: AppGraph) {
                     )
                 }
             }
+
+            // ---- 图像通道（对齐源工程 ImageModelBlock：三通道 Key 状态透明） ----
+            DramaCard(Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("图像通道（资产图 / 封面图）", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "资产图与封面图由图像通道生成。当前实现复用上方 Agnes Key（同一把 Key 打通文本/视频/图像三通道），无需单独配置；若文本模型选 DeepSeek、视频/图像走 Agnes，请在上方文本模型区块保存 Agnes Key 后此处即生效。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                    Text(
+                        "当前图像 Key：${imageSummary(configs)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+            }
         }
 }
 
 private fun agnesSummary(configs: List<ProviderConfigEntity>): String =
     configs.firstOrNull { it.providerId == "agnes" && it.channel == "video" }?.keyMasked?.let { "已配置 $it" } ?: "未配置"
+
+/** 图像通道 Key 状态：与 Agnes 文本/视频共用同一把 Key */
+private fun imageSummary(configs: List<ProviderConfigEntity>): String =
+    configs.firstOrNull { it.providerId == "agnes" && it.channel == "text" }?.keyMasked?.let { "已配置 $it" } ?: "未配置"

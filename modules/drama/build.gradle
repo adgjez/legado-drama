@@ -72,6 +72,11 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
 
+    // 资产缩略图加载（对齐源工程 GridAssetCard：92dp 缩略图 + 失败占位）
+    implementation(libs.glide.glide)
+    implementation(libs.glide.okhttp)
+    implementation(libs.glide.compose)
+
     // 端侧成片合成：Media3 Transformer（ffmpeg-kit-full 上游已归档无法获取，
     // 架构文档 R1 允许降级路径：同规格拼接/分段导出）
     implementation(libs.media3.transformer)

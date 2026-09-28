@@ -331,7 +331,9 @@ private fun HomeModelConfigCard(onOpenSettings: () -> Unit) {
         hasText = runCatching { keyVault.masked("deepseek").isNotEmpty() || keyVault.masked("agnes").isNotEmpty() }
             .getOrDefault(false)
         hasVideo = runCatching { keyVault.masked("agnes").isNotEmpty() }.getOrDefault(false)
-        hasImage = false // 图像通道复用文本 Key（Agnes），无独立图像 Key
+        // 图像通道由 Agnes ImageProvider 提供，与文本/视频共用同一把 Agnes Key
+        // （legado 引擎不区分独立图像 Key，见 setSettings 页「图像通道」说明卡）
+        hasImage = runCatching { keyVault.masked("agnes").isNotEmpty() }.getOrDefault(false)
         checked = true
     }
     if (!checked) return

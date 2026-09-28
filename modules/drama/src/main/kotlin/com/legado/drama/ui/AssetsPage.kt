@@ -1,6 +1,8 @@
 package com.legado.drama.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -29,7 +31,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
+import com.bumptech.glide.integration.compose.GlideImage
+import com.bumptech.glide.integration.compose.placeholder
 import com.legado.drama.AppGraph
 import com.legado.drama.data.entity.AssetEntity
 import com.legado.drama.ui.components.DramaCard
@@ -58,6 +65,7 @@ private fun kindLabel(kind: String): String = when (kind) {
  * 全部保留、标记评审通过后可渲染）。legado 资产由 AI 流水线自动生成，
  * 本页只负责审核与放行。
  */
+@OptIn(ExperimentalGlideComposeApi::class)
 @Composable
 fun AssetsPage(
     graph: AppGraph,
@@ -157,6 +165,31 @@ fun AssetsPage(
         items(filtered, key = { it.assetId }) { a: AssetEntity ->
             DramaCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // 缩略图区（对齐源工程 GridAssetCard：92dp + imageUri/remoteUrl + 失败占位）
+                    val thumbModel = a.fileUri ?: a.remoteUrl
+                    if (thumbModel != null) {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().height(92.dp)
+                                .background(MaterialTheme.colorScheme.surfaceContainerLow),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            GlideImage(
+                                model = thumbModel,
+                                contentDescription = a.prompt,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop,
+                                loading = placeholder {},
+                                failure = placeholder {
+                                    Text(
+                                        "图片加载失败",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                        textAlign = TextAlign.Center,
+                                    )
+                                },
+                            )
+                        }
+                    }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("${kindLabel(a.kind)}${a.poseRole?.let { " · $it" } ?: ""}", style = MaterialTheme.typography.titleSmall)
                     }
