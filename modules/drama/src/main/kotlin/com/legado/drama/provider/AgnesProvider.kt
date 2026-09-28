@@ -72,6 +72,12 @@ class AgnesProvider(
     private val configIdKey: String get() = agnesScopedConfigId(PROVIDER_ID, region)
 
     /**
+     * 独立图像 Key 维度（对齐源工程 CONFIG_IMAGE="agnes-image"，与文本 agnes / 视频 agnes-video 分开保存）：
+     * 国际站 "agnes-image"，中国站 "agnes-image-cn"。
+     */
+    private val imageConfigIdKey: String get() = agnesScopedConfigId(CONFIG_IMAGE, region)
+
+    /**
      * 生效基址：中国站且 baseUrl 仍为国际站默认值（用户未自定义）→ 切中国站根域；
      * 其余（用户自定义 / 国际站）尊重配置。legado 根域语义不带 /v1，路径由调用处拼接。
      */
@@ -204,8 +210,9 @@ class AgnesProvider(
     // ── ImageProvider（Agnes 图像）──
     override suspend fun generateImage(req: ImageGenRequest): String {
         rateGate.awaitSlot(ChannelKind.IMAGE)
-        val key = keyVault.load(configIdKey)
-        if (key.isBlank()) throw ProviderError.AuthError("未配置 Agnes Key")
+        // 独立图像 Key 优先（agnesis-image / agnes-image-cn），未配置时回退共享 Agnes Key（agnesis / agnes-cn）
+        val key = keyVault.load(imageConfigIdKey).ifBlank { keyVault.load(configIdKey) }
+        if (key.isBlank()) throw ProviderError.AuthError("未配置 Agnes 图像 Key")
         val resp = withRetry429 {
             client.post("$effectiveBaseUrl/images/generations") {
                 auth(key)
@@ -280,6 +287,13 @@ class AgnesProvider(
         const val PROVIDER_ID = "agnes"
         const val DEFAULT_VIDEO_MODEL = "agnes-2.5-flash"
         const val TEXT_MODEL = "agnes-2.5-flash"
+
+        /**
+         * 独立图像 Key 维度（对齐源工程 CONFIG_IMAGE="agnes-image"）：
+         * 图像通道专用，与文本 agnes / 视频 agnes-video 分开保存，两站各自分池。
+         */
+        const val CONFIG_IMAGE = "agnes-image"
+
         const val MAX_QUOTA_RETRY = 3
         const val MAX_5XX_RETRY = 3
 

@@ -433,6 +433,7 @@ fun SettingsPage(graph: AppGraph) {
     val scope = rememberCoroutineScope()
     var agnesKey by remember { mutableStateOf("") }
     var deepseekKey by remember { mutableStateOf("") }
+    var agnesImageKey by remember { mutableStateOf("") }
     var interval by remember { mutableStateOf(graph.providerPrefs.videoIntervalMs.toString()) }
     var baseUrl by remember { mutableStateOf(graph.providerPrefs.agnesBaseUrl) }
     var agnesRegion by remember { mutableStateOf(graph.providerPrefs.agnesRegion) }
@@ -644,20 +645,64 @@ fun SettingsPage(graph: AppGraph) {
                 }
             }
 
-            // ---- 图像通道（对齐源工程 ImageModelBlock：三通道 Key 状态透明） ----
+            // ── 图像通道（对齐源工程 ImageModelBlock：独立 Agnes 图像 Key） ──
             DramaCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("图像通道（资产图 / 封面图）", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "资产图与封面图由图像通道生成。当前实现复用上方 Agnes Key（同一把 Key 打通文本/视频/图像三通道），无需单独配置；若文本模型选 DeepSeek、视频/图像走 Agnes，请在上方文本模型区块保存 Agnes Key 后此处即生效。",
+                        "资产图与封面图由图像通道生成。此处可单独配置 Agnes 图像 Key（两站独立保存）；未单独配置时回退复用上方 Agnes Key（与视频通道同源）。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
                     Text(
-                        "当前图像 Key：${imageSummary(configs)}",
+                        "当前图像 Key：${imageSummary(graph, agnesRegion)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
+                    OutlinedTextField(
+                        value = agnesImageKey,
+                        onValueChange = { agnesImageKey = it },
+                        label = { Text("Agnes 图像 Key（sk-…，独立于文本/视频 Key）") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            scope.launch {
+                                val key = agnesImageKey.trim()
+                                if (key.isBlank()) {
+                                    snackbar.show("请先填写 Agnes 图像 Key")
+                                    return@launch
+                                }
+                                val scopedImageId = graph.agnesImageKeyId()
+                                graph.keyVault.save(scopedImageId, AgnesProvider.PROVIDER_ID, key)
+                                agnesImageKey = ""
+                                // 同步 provider_configs image 行（对齐文本/视频区块的持久化模式）
+                                graph.db.providerConfigDao().upsert(
+                                    ProviderConfigEntity(
+                                        configId = "$scopedImageId-image",
+                                        channel = "image",
+                                        providerId = AgnesProvider.PROVIDER_ID,
+                                        model = "image",
+                                        keyMasked = graph.keyVault.masked(scopedImageId),
+                                        isVerified = false,
+                                        updatedAt = System.currentTimeMillis(),
+                                    ),
+                                )
+                                graph.refreshConfigs()
+                                snackbar.show("Agnes 图像 Key 已保存（独立通道）")
+                            }
+                        }) { Text("保存图像 Key") }
+                        OutlinedButton(onClick = {
+                            scope.launch {
+                                val scopedImageId = graph.agnesImageKeyId()
+                                graph.keyVault.delete(scopedImageId)
+                                graph.db.providerConfigDao().delete("$scopedImageId-image")
+                                graph.refreshConfigs()
+                                snackbar.show("Agnes 图像 Key 已清除（回退共享 Key）")
+                            }
+                        }) { Text("清除") }
+                    }
                 }
             }
         }
@@ -666,6 +711,15 @@ fun SettingsPage(graph: AppGraph) {
 private fun agnesSummary(configs: List<ProviderConfigEntity>): String =
     configs.firstOrNull { it.providerId == "agnes" && it.channel == "video" }?.keyMasked?.let { "已配置 $it" } ?: "未配置"
 
-/** 图像通道 Key 状态：与 Agnes 文本/视频共用同一把 Key */
-private fun imageSummary(configs: List<ProviderConfigEntity>): String =
-    configs.firstOrNull { it.providerId == "agnes" && it.channel == "text" }?.keyMasked?.let { "已配置 $it" } ?: "未配置"
+/**
+ * 图像通道 Key 状态：优先展示独立图像 Key（agnes-image 分池掩码），
+ * 未单独配置时提示回退复用共享 Agnes Key（与 generateImage 运行时取 Key 链一致）。
+ */
+private fun imageSummary(graph: AppGraph, region: AgnesRegion): String {
+    val imageMasked = graph.keyVault.masked(graph.agnesImageKeyId())
+    if (imageMasked.isNotEmpty()) return "已配置 $imageMasked（独立图像 Key）"
+    val sharedMasked = graph.keyVault.masked(
+        agnesScopedConfigId(AgnesProvider.PROVIDER_ID, region),
+    )
+    return if (sharedMasked.isNotEmpty()) "未单独配置，回退共享 Key（$sharedMasked）" else "未配置"
+}

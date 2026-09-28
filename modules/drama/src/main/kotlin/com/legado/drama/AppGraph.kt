@@ -170,6 +170,20 @@ class AppGraph private constructor(context: Context) {
         agnesProvider.region = region
     }
 
+    /** 当前站点分池后的独立图像 Key 维度（国际站 agnes-image / 中国站 agnes-image-cn） */
+    fun agnesImageKeyId(): String =
+        agnesScopedConfigId(AgnesProvider.CONFIG_IMAGE, providerPrefs.agnesRegion)
+
+    /**
+     * 图像通道是否就绪（对齐源工程 AppGraph.hasImageKey 同源语义）：
+     * 优先独立图像 Key（agnes-image 分池），未配置时回退共享 Agnes Key（agnesis 分池），
+     * 与 AgnesProvider.generateImage 的运行时取 Key 链一致。
+     */
+    fun hasImageKey(): Boolean {
+        if (keyVault.masked(agnesImageKeyId()).isNotEmpty()) return true
+        return keyVault.masked(agnesScopedConfigId(AgnesProvider.PROVIDER_ID, providerPrefs.agnesRegion)).isNotEmpty()
+    }
+
     /** 当前剧集所属项目的资产 ID 白名单（六铁律·资产真实绑定） */
     private var activeProjectId: String = ""
     /** 资产白名单缓存：StoryboardGate 构造签名是同步 lambda，故用缓存桥接 Room 挂起查询 */

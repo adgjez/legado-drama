@@ -319,21 +319,26 @@ private fun ManualPipelineBody(graph: AppGraph) {
  */
 @Composable
 private fun HomeModelConfigCard(onOpenSettings: () -> Unit) {
-    val keyVault = com.legado.drama.AppGraph.get(
+    val graph = com.legado.drama.AppGraph.get(
         androidx.compose.ui.platform.LocalContext.current,
-    ).keyVault
+    )
+    val keyVault = graph.keyVault
     var hasText by remember { mutableStateOf(false) }
     var hasVideo by remember { mutableStateOf(false) }
     var hasImage by remember { mutableStateOf(false) }
     var checked by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        hasText = runCatching { keyVault.masked("deepseek").isNotEmpty() || keyVault.masked("agnes").isNotEmpty() }
+        // Agnes 判据按当前站点分池读取（国际站 agnes / 中国站 agnes-cn）
+        val agnesKeyId = com.legado.drama.provider.agnesScopedConfigId(
+            com.legado.drama.provider.AgnesProvider.PROVIDER_ID,
+            graph.providerPrefs.agnesRegion,
+        )
+        hasText = runCatching { keyVault.masked("deepseek").isNotEmpty() || keyVault.masked(agnesKeyId).isNotEmpty() }
             .getOrDefault(false)
-        hasVideo = runCatching { keyVault.masked("agnes").isNotEmpty() }.getOrDefault(false)
-        // 图像通道由 Agnes ImageProvider 提供，与文本/视频共用同一把 Agnes Key
-        // （legado 引擎不区分独立图像 Key，见 setSettings 页「图像通道」说明卡）
-        hasImage = runCatching { keyVault.masked("agnes").isNotEmpty() }.getOrDefault(false)
+        hasVideo = runCatching { keyVault.masked(agnesKeyId).isNotEmpty() }.getOrDefault(false)
+        // 图像通道：优先独立图像 Key（agnes-image 分池），未配置时回退共享 Agnes Key（同 generateImage 取 Key 链）
+        hasImage = runCatching { graph.hasImageKey() }.getOrDefault(false)
         checked = true
     }
     if (!checked) return
