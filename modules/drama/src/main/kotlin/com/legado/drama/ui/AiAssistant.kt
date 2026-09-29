@@ -40,7 +40,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.legado.drama.R
 import com.legado.drama.ui.theme.DramaGradients
 import com.legado.drama.ui.theme.DramaNeon
 
@@ -92,7 +94,7 @@ fun AiAssistantFloating(onClick: () -> Unit) {
         ) {
             Icon(
                 imageVector = Icons.Filled.SmartToy,
-                contentDescription = "AI 助手",
+                contentDescription = stringResource(R.string.ai_title),
                 tint = MaterialTheme.colorScheme.onPrimary,
             )
         }
@@ -107,11 +109,14 @@ fun AiAssistantFloating(onClick: () -> Unit) {
  */
 @Composable
 fun AiAssistantPanel(onDismiss: () -> Unit) {
+    val greeting = stringResource(R.string.ai_greeting)
+    val intro = stringResource(R.string.ai_intro)
+    val replyText = stringResource(R.string.ai_reply)
     var messages by remember {
         mutableStateOf(
             listOf(
-                AiMsg("ai", "你好，我是 AI 短剧助手 ✨"),
-                AiMsg("ai", "把剧本粘贴到首页「AI 一键成片」即可全自动走完 五阶段流水线；有问题随时问我。"),
+                AiMsg("ai", greeting),
+                AiMsg("ai", intro),
             ),
         )
     }
@@ -141,12 +146,12 @@ fun AiAssistantPanel(onDismiss: () -> Unit) {
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                text = "AI 助手",
+                text = stringResource(R.string.ai_title),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f),
             )
             IconButton(onClick = onDismiss) {
-                Icon(Icons.Filled.Close, contentDescription = "关闭", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.ai_close), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         // 消息流
@@ -173,7 +178,7 @@ fun AiAssistantPanel(onDismiss: () -> Unit) {
                             .fillMaxWidth()
                             .padding(end = 48.dp)
                             .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp))
-                            .border(1.dp, DramaNeon.GlassStroke, RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp))
+                            .border(androidx.compose.foundation.BorderStroke(1.dp, DramaNeon.GlassStroke), RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp))
                             .padding(12.dp),
                     ) {
                         Text(
@@ -194,7 +199,7 @@ fun AiAssistantPanel(onDismiss: () -> Unit) {
                 value = input,
                 onValueChange = { input = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("问问 AI 助手…", style = MaterialTheme.typography.bodyMedium) },
+                placeholder = { Text(stringResource(R.string.ai_placeholder), style = MaterialTheme.typography.bodyMedium) },
                 shape = RoundedCornerShape(12.dp),
             )
             Spacer(Modifier.width(10.dp))
@@ -214,13 +219,13 @@ fun AiAssistantPanel(onDismiss: () -> Unit) {
                             messages = messages + AiMsg("user", input.trim())
                             input = ""
                             // 本地轻量回应（不引入实时 LLM 依赖；规格只约束交互形态）
-                            messages = messages + AiMsg("ai", "已收到，我会在渲染流水线中处理你的需求。")
+                            messages = messages + AiMsg("ai", replyText)
                         }
                     },
             ) {
                 Icon(
                     imageVector = Icons.Filled.Send,
-                    contentDescription = "发送",
+                    contentDescription = stringResource(R.string.ai_send),
                     tint = MaterialTheme.colorScheme.onPrimary,
                 )
             }

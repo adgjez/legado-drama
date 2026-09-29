@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.annotation.StringRes
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -42,9 +43,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.legado.drama.AppGraph
 import com.legado.drama.ProviderPrefs
+import com.legado.drama.R
 import com.legado.drama.data.entity.ProjectEntity
 import com.legado.drama.engine.orchestrator.PipelineStage
 import com.legado.drama.engine.orchestrator.ProgressEvent
@@ -70,6 +73,7 @@ fun ProjectsPage(
     val projects by graph.db.projectDao().observeAll().collectAsState(initial = emptyList())
     val snackbar = LocalDramaSnackbar.current
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var deleteTarget by remember { mutableStateOf<ProjectEntity?>(null) }
 
     LazyColumn(
@@ -77,7 +81,7 @@ fun ProjectsPage(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            PageHeader(title = "AI短剧工厂", subtitle = "创建项目 · 导入剧本 · 进入制作")
+            PageHeader(title = stringResource(R.string.projects_title), subtitle = stringResource(R.string.projects_subtitle))
         }
         item { HomeModelConfigCard(onOpenSettings) }
         item {
@@ -87,8 +91,8 @@ fun ProjectsPage(
             item {
                 EmptyState(
                     icon = { Icon(Icons.Filled.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(40.dp)) },
-                    title = "还没有项目",
-                    subtitle = "在「新建项目」卡里粘贴一段小说或剧本，AI 会帮你自动拆成资产、分镜、渲染并合成成片。",
+                    title = stringResource(R.string.projects_empty_title),
+                    subtitle = stringResource(R.string.projects_empty_subtitle),
                 )
             }
         }
@@ -103,11 +107,11 @@ fun ProjectsPage(
                         Text(p.name, style = MaterialTheme.typography.titleMedium)
                         val dateStr = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA)
                             .format(java.util.Date(p.createdAt))
-                        Text("预算 ${p.budgetShots} 镜 · $dateStr", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        Text(stringResource(R.string.project_meta, p.budgetShots, dateStr), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        OutlinedButton(onClick = { onEnterProject(p.projectId, p.name) }) { Text("进入") }
-                        OutlinedButton(onClick = { deleteTarget = p }) { Text("删除") }
+                        OutlinedButton(onClick = { onEnterProject(p.projectId, p.name) }) { Text(stringResource(R.string.common_enter)) }
+                        OutlinedButton(onClick = { deleteTarget = p }) { Text(stringResource(R.string.common_delete)) }
                     }
                 }
             }
@@ -117,18 +121,18 @@ fun ProjectsPage(
     deleteTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
-            title = { Text("删除项目「${target.name}」？") },
-            text = { Text("项目的资产、分镜与渲染记录将一并删除，不可恢复。") },
+            title = { Text(stringResource(R.string.project_delete_title, target.name)) },
+            text = { Text(stringResource(R.string.project_delete_text)) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
                         graph.db.projectDao().delete(target.projectId)
-                        snackbar.show("已删除项目「${target.name}」")
+                        snackbar.show(context.getString(R.string.project_deleted, target.name))
                     }
                     deleteTarget = null
-                }) { Text("删除") }
+                }) { Text(stringResource(R.string.common_delete)) }
             },
-            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text(stringResource(R.string.common_cancel)) } },
         )
     }
 }
@@ -145,7 +149,7 @@ private fun NewProjectCard(graph: AppGraph) {
     }
     DramaCard(Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("新建项目", style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.project_new_title), style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 DramaFilterChip(
                     selected = mode == "ai",
@@ -153,7 +157,7 @@ private fun NewProjectCard(graph: AppGraph) {
                         mode = "ai"
                         graph.providerPrefs.lastMode = ProviderPrefs.MODE_AI
                     },
-                    label = { Text("AI 一键成片") },
+                    label = { Text(stringResource(R.string.project_mode_ai)) },
                 )
                 DramaFilterChip(
                     selected = mode == "manual",
@@ -161,7 +165,7 @@ private fun NewProjectCard(graph: AppGraph) {
                         mode = "manual"
                         graph.providerPrefs.lastMode = ProviderPrefs.MODE_MANUAL
                     },
-                    label = { Text("手动七阶段") },
+                    label = { Text(stringResource(R.string.project_mode_manual)) },
                 )
             }
             when (mode) {
@@ -188,24 +192,24 @@ private fun AiPipelineBody(graph: AppGraph) {
         value = script,
         onValueChange = { script = it },
         modifier = Modifier.fillMaxWidth().height(120.dp),
-        label = { Text("粘贴剧本（≥100 字）") },
+        label = { Text(stringResource(R.string.project_script_label)) },
     )
     Row(verticalAlignment = Alignment.CenterVertically) {
         Checkbox(checked = copyrightChecked, onCheckedChange = { copyrightChecked = it })
-        Text("我已确认拥有剧本著作权或合法改编授权（导入版权确认 Q4）", style = MaterialTheme.typography.bodySmall)
+        Text(stringResource(R.string.project_copyright), style = MaterialTheme.typography.bodySmall)
     }
     HeroButton(
-        text = if (running) "流水线运行中…" else "一键成片",
+        text = if (running) stringResource(R.string.project_running) else stringResource(R.string.project_one_click),
         onClick = {
             scope.launch {
                 running = true
                 try {
                     graph.aiOrchestrator.run(script) { projectId, episodeId ->
                         graph.setActiveProject(projectId)
-                        snackbar.show("已建项目并生成剧集 $episodeId")
+                        snackbar.show(context.getString(R.string.project_created, episodeId))
                     }
                 } catch (e: Exception) {
-                    snackbar.show("启动失败：${e.message}")
+                    snackbar.show(context.getString(R.string.project_start_failed, e.message ?: "?"))
                 } finally {
                     running = false
                 }
@@ -216,7 +220,7 @@ private fun AiPipelineBody(graph: AppGraph) {
     )
     if (events.isNotEmpty()) {
         Text(
-            "流水线日志 · ${events.size} 条（长按任意行复制全文）",
+            stringResource(R.string.project_log_title, events.size),
             style = MaterialTheme.typography.titleMedium,
         )
         // 固定高度滚动的日志区（Event 已裁剪至 500 条内，Column 渲染即可）
@@ -240,7 +244,7 @@ private fun copyLog(context: Context, events: List<ProgressEvent>) {
     }
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("drama-pipeline-log", text))
-    Toast.makeText(context, "流水线日志已复制（${events.size} 条）", Toast.LENGTH_SHORT).show()
+    Toast.makeText(context, context.getString(R.string.project_log_copied, events.size), Toast.LENGTH_SHORT).show()
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -252,7 +256,7 @@ private fun ProgressRow(e: ProgressEvent, onLongClick: () -> Unit) {
         ProgressEvent.Level.INFO -> MaterialTheme.colorScheme.onSurface
     }
     Text(
-        text = "+${e.elapsedMs / 1000}s · ${e.stage.label} · ${e.message}",
+        text = "+${e.elapsedMs / 1000}s · ${stage5Label(e.stage)} · ${e.message}",
         style = MaterialTheme.typography.bodySmall,
         color = color,
         modifier = Modifier
@@ -261,16 +265,40 @@ private fun ProgressRow(e: ProgressEvent, onLongClick: () -> Unit) {
     )
 }
 
+/** 五阶段标签 → 资源（引擎 JVM 模块不引 Android 资源，UI 层映射） */
+@Composable
+private fun stage5Label(stage: com.legado.drama.engine.orchestrator.PipelineStage5): String = when (stage) {
+    com.legado.drama.engine.orchestrator.PipelineStage5.EXTRACT_ASSETS -> stringResource(R.string.stage5_extract_assets)
+    com.legado.drama.engine.orchestrator.PipelineStage5.GENERATE_IMAGES -> stringResource(R.string.stage5_generate_images)
+    com.legado.drama.engine.orchestrator.PipelineStage5.AUDIT -> stringResource(R.string.stage5_audit)
+    com.legado.drama.engine.orchestrator.PipelineStage5.GENERATE_STORYBOARD -> stringResource(R.string.stage5_generate_storyboard)
+    com.legado.drama.engine.orchestrator.PipelineStage5.ENQUEUE_RENDER -> stringResource(R.string.stage5_enqueue_render)
+    com.legado.drama.engine.orchestrator.PipelineStage5.ENQUEUE_RENDER_DONE -> stringResource(R.string.stage5_done)
+}
+
+/** 七阶段标签 → 资源（引擎 JVM 模块不引 Android 资源，UI 层映射） */
+@Composable
+private fun stageLabel(s: PipelineStage): String = when (s) {
+    PipelineStage.S1_PROJECT -> stringResource(R.string.stage_s1_project)
+    PipelineStage.S2_IMPORT -> stringResource(R.string.stage_s2_import)
+    PipelineStage.S3_ASSETS -> stringResource(R.string.stage_s3_assets)
+    PipelineStage.S4_REVIEW -> stringResource(R.string.stage_s4_review)
+    PipelineStage.S5_STORYBOARD -> stringResource(R.string.stage_s5_storyboard)
+    PipelineStage.S6_RENDER -> stringResource(R.string.stage_s6_render)
+    PipelineStage.S7_FILM -> stringResource(R.string.stage_s7_film)
+}
+
 /** 手动七阶段（S1 项目 → S7 成片 闸门评估） */
 @Composable
 private fun ManualPipelineBody(graph: AppGraph) {
     val scope = rememberCoroutineScope()
     val snackbar = LocalDramaSnackbar.current
+    val context = LocalContext.current
     val stage by graph.pipelineOrchestrator.stage.collectAsState()
     var gateSummary by remember { mutableStateOf<String?>(null) }
     val projects by graph.db.projectDao().observeAll().collectAsState(initial = emptyList())
 
-    Text("七阶段状态机", style = MaterialTheme.typography.titleMedium)
+    Text(stringResource(R.string.project_manual_title), style = MaterialTheme.typography.titleMedium)
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         for (s in PipelineStage.entries) {
             val active = s == stage
@@ -278,7 +306,7 @@ private fun ManualPipelineBody(graph: AppGraph) {
                 selected = active,
                 onClick = {},
                 enabled = false,
-                label = { Text(s.label, style = MaterialTheme.typography.labelSmall) },
+                label = { Text(stageLabel(s), style = MaterialTheme.typography.labelSmall) },
             )
         }
     }
@@ -286,28 +314,28 @@ private fun ManualPipelineBody(graph: AppGraph) {
         scope.launch {
             val project = projects.firstOrNull()
             if (project == null) {
-                gateSummary = "暂无项目，请先使用 AI 一键成片"
+                gateSummary = context.getString(R.string.project_no_project_gate)
             } else {
                 graph.setActiveProject(project.projectId)
                 val report = graph.pipelineOrchestrator.evaluateGates(project.projectId)
                 gateSummary = buildString {
-                    appendLine("资产生成: ${report.assetsGenerated}")
-                    appendLine("评审通过: ${report.reviewPassed}")
-                    appendLine("分镜六铁律: ${report.storyboardPassed}")
-                    appendLine("Key 有效: ${report.keyValid}")
-                    appendLine("预算: ${report.budgetOk}")
-                    appendLine("可渲染: ${report.canRender}")
+                    appendLine(context.getString(R.string.project_gate_assets, report.assetsGenerated))
+                    appendLine(context.getString(R.string.project_gate_review, report.reviewPassed))
+                    appendLine(context.getString(R.string.project_gate_storyboard, report.storyboardPassed))
+                    appendLine(context.getString(R.string.project_gate_key, report.keyValid))
+                    appendLine(context.getString(R.string.project_gate_budget, report.budgetOk))
+                    appendLine(context.getString(R.string.project_gate_render, report.canRender))
                 }
-                snackbar.show("已评估 ${project.name} 闸门")
+                snackbar.show(context.getString(R.string.project_gate_evaluated, project.name))
             }
         }
-    }) { Text("评估当前项目闸门") }
+    }) { Text(stringResource(R.string.project_gate_btn)) }
     gateSummary?.let {
         Spacer(Modifier.height(8.dp))
         Text(it, style = MaterialTheme.typography.bodySmall)
     }
     Text(
-        "说明：S2 导入/S3 资产由 AI 流水线填充；S4 评审在资产页完成；S5 六铁律在渲染出队时复核；渲染在「渲染」页执行；S7 合并在「成片」页。",
+        stringResource(R.string.project_manual_desc),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.outline,
     )
@@ -343,29 +371,37 @@ private fun HomeModelConfigCard(onOpenSettings: () -> Unit) {
     }
     if (!checked) return
 
-    val missing = listOf(!hasText to "文本", !hasVideo to "视频", !hasImage to "图像").filter { it.first }
+    val missing = listOf(
+        !hasText to stringResource(R.string.channel_text),
+        !hasVideo to stringResource(R.string.channel_video),
+        !hasImage to stringResource(R.string.channel_image),
+    ).filter { it.first }
     DramaCard(Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("模型配置", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.model_config_title), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.weight(1f))
                 if (missing.isEmpty()) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                        Text("全部就绪", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        Text(stringResource(R.string.model_config_ready), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                     }
                 } else {
-                    Text("待配置：${missing.joinToString("、") { it.second }}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                    Text(
+                        stringResource(R.string.model_config_missing, missing.joinToString("、") { it.second }),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                StatusDot("文本", hasText)
-                StatusDot("视频", hasVideo)
-                StatusDot("图像", hasImage)
+                StatusDot(stringResource(R.string.channel_text), hasText)
+                StatusDot(stringResource(R.string.channel_video), hasVideo)
+                StatusDot(stringResource(R.string.channel_image), hasImage)
             }
-            Text("模型 Key 决定 AI 对话 / 出图 / 渲染能否跑通。首次使用先到这里补 Key。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+            Text(stringResource(R.string.model_config_desc), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
             OutlinedButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
-                Text(if (missing.isEmpty()) "管理模型 Key" else "去配置模型 Key")
+                Text(stringResource(if (missing.isEmpty()) R.string.model_config_manage else R.string.model_config_configure))
             }
         }
     }

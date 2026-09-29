@@ -1,0 +1,289 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ============ 导航/全局 (DramaApp) ============ -->
+    <string name="page_projects">项目</string>
+    <string name="page_episodes">剧集</string>
+    <string name="page_assets">资产</string>
+    <string name="page_storyboard">分镜</string>
+    <string name="page_queue">渲染</string>
+    <string name="page_library">成片</string>
+    <string name="page_settings">设置</string>
+    <string name="nav_back">返回</string>
+    <string name="nav_settings">设置</string>
+    <string name="app_project_gone">项目已删除，请返回项目页重新选择</string>
+
+    <!-- ============ 开屏 (DramaMainActivity) ============ -->
+    <string name="splash_title">AI 短剧工厂</string>
+    <string name="splash_tagline">开源你的梦境</string>
+    <string name="splash_steps">剧本 · 资产 · 分镜 · 渲染 · 成片</string>
+
+    <!-- ============ AI 助手面板 (AiAssistant) ============ -->
+    <string name="ai_title">AI 助手</string>
+    <string name="ai_close">关闭</string>
+    <string name="ai_send">发送</string>
+    <string name="ai_greeting">你好，我是 AI 短剧助手 ✨</string>
+    <string name="ai_intro">把剧本粘贴到首页「AI 一键成片」即可全自动走完五阶段流水线；有问题随时问我。</string>
+    <string name="ai_placeholder">问问 AI 助手…</string>
+    <string name="ai_reply">已收到，我会在渲染流水线中处理你的需求。</string>
+
+    <!-- ============ 渲染队列页 (DramaScreens QueuePage) ============ -->
+    <string name="queue_title">渲染队列</string>
+    <string name="queue_subtitle">镜头状态机实时刷新 · 可暂停/恢复</string>
+    <string name="queue_no_episode_title">暂无剧集</string>
+    <string name="queue_no_episode_subtitle">暂无渲染任务。请先在「项目」页用 AI 一键成片生成剧集。</string>
+    <string name="queue_episode_progress">第%1$s集 · %2$d/%3$d 镜完成</string>
+    <string name="queue_progress_summary">完成 %1$d · 失败 %2$d · 排队 %3$d · 处理中 %4$d</string>
+    <string name="queue_paused_reason">暂停原因：%1$s</string>
+    <string name="queue_idle">队列空闲</string>
+    <string name="queue_resume_btn">恢复渲染</string>
+    <string name="queue_start_btn">开始渲染</string>
+    <string name="queue_pause_btn">暂停</string>
+    <string name="queue_service_started">渲染服务已启动</string>
+    <string name="queue_resumed">已恢复渲染</string>
+    <string name="queue_paused">已暂停渲染</string>
+    <string name="queue_budget_title">预算已达上限</string>
+    <string name="queue_budget_text">已暂停：预算达上限，等待确认。继续渲染将超出预设上限并产生额外费用。\n\n确认继续吗？</string>
+    <string name="queue_budget_confirm_btn">继续渲染（超限放行）</string>
+    <string name="queue_budget_confirm_snack">已确认超限放行，恢复渲染</string>
+    <string name="queue_budget_dismiss_btn">暂不渲染</string>
+    <string name="queue_empty_title">暂无渲染任务</string>
+    <string name="queue_empty_subtitle">episode=%1$s · 渲染任务入队后会在这里实时刷新</string>
+    <string name="queue_shot_title">镜 %1$s</string>
+    <string name="queue_shot_state">状态 %1$s</string>
+    <string name="queue_shot_blocked">阻塞：%1$s</string>
+    <string name="queue_shot_cancelled">镜 %1$s 已取消</string>
+    <string name="queue_cancel_btn">取消</string>
+    <string name="queue_pause_budget">预算达上限，等待确认</string>
+    <string name="queue_pause_network">网络异常</string>
+    <string name="queue_pause_auth">API Key 失效，请到设置页更新</string>
+    <string name="queue_pause_review">资产评审未通过</string>
+    <string name="queue_pause_noshots">本集没有分镜</string>
+    <string name="queue_pause_user">用户手动暂停</string>
+    <string name="queue_state_pending">排队</string>
+    <string name="queue_state_submitted">渲染中</string>
+    <string name="queue_state_completed">已完成</string>
+    <string name="queue_state_failed">失败</string>
+    <string name="queue_state_blocked">阻塞</string>
+
+    <!-- ============ 成片库页 (DramaScreens LibraryPage) ============ -->
+    <string name="library_title">成片库</string>
+    <string name="library_subtitle">已合成剧集 · 可播放与分享</string>
+    <string name="library_current_assemble">当前剧集合成</string>
+    <string name="library_episode_summary">第%1$d集（%2$d 集 · 已渲染 %3$d/%4$d 镜）</string>
+    <string name="library_assemble_ready">合成整集成片</string>
+    <string name="library_assemble_waiting">合成（需全部单镜渲染完成）</string>
+    <string name="library_no_clips">没有已落盘的单镜片段，请先完成渲染</string>
+    <string name="library_assemble_done">成片完成：%1$s</string>
+    <string name="library_assemble_segmented">分段导出 %1$d 段（尚未合并）</string>
+    <string name="library_assemble_failed">合成失败：%1$s</string>
+    <string name="library_empty_title">还没有成片</string>
+    <string name="library_empty_subtitle">渲染完成后在「成片」页合成整集，成片将出现在这里。</string>
+    <string name="library_film_title">第%1$s集 · %2$s</string>
+    <string name="library_film_meta">时长 %1$.1fs · %2$dKB</string>
+    <string name="library_play_btn">播放</string>
+    <string name="library_share_btn">分享</string>
+    <string name="library_delete_btn">删除</string>
+    <string name="library_delete_title">删除成片</string>
+    <string name="library_delete_text">确定删除 %1$s… 吗？此操作不可恢复。</string>
+    <string name="library_deleted">成片已删除</string>
+    <string name="library_share_chooser">分享成片</string>
+
+    <!-- ============ 设置页 (DramaScreens SettingsPage) ============ -->
+    <string name="settings_title">设置</string>
+    <string name="settings_subtitle">模型供应商 · Key 加密存储 · 渲染参数</string>
+    <string name="settings_agnes_title">Agnes 站点</string>
+    <string name="settings_agnes_current">当前：%1$s</string>
+    <string name="settings_agnes_desc">国际站（apihub.agnes-ai.com）与中国站（api.agnes-ai.cn）Key 相互独立、分开保存；切换站点后请确认该站已填写对应 Key。</string>
+    <string name="settings_agnes_intl">国际站</string>
+    <string name="settings_agnes_cn">中国站</string>
+    <string name="settings_agnes_switched">Agnes 站点已切换：%1$s（两站 Key 独立）</string>
+    <string name="settings_text_model_title">文本模型（剧本/分镜大脑）</string>
+    <string name="settings_text_model_active">生效：%1$s</string>
+    <string name="settings_text_model_switched">文本模型已切换：%1$s</string>
+    <string name="settings_model_id">模型 %1$s</string>
+    <string name="settings_model_key"> · Key %1$s</string>
+    <string name="settings_model_no_key"> · 未配置 Key</string>
+    <string name="settings_model_verified"> · 已验证</string>
+    <string name="settings_model_key_label">%1$s Key（sk-…）</string>
+    <string name="settings_key_missing">请先填写 %1$s 的 Key</string>
+    <string name="settings_key_saved_ok">%1$s Key 已保存并连通（%2$sms）</string>
+    <string name="settings_key_saved_fail">%1$s Key 已保存，连通失败：%2$s</string>
+    <string name="settings_key_save_btn">保存并验证</string>
+    <string name="settings_key_clear_btn">清除</string>
+    <string name="settings_key_cleared">%1$s Key 已清除</string>
+    <string name="settings_video_title">视频通道（Agnes 出片）</string>
+    <string name="settings_video_desc">视频 Key 与上方「Agnes 文本」共用同一把 Key，保存/验证后在文本模型区块完成。</string>
+    <string name="settings_video_current">当前视频 Key：%1$s</string>
+    <string name="settings_base_url_label">Agnes Base URL</string>
+    <string name="settings_interval_label">视频提交限速间隔（秒）</string>
+    <string name="settings_save_btn">保存设置</string>
+    <string name="settings_saved">设置已保存</string>
+    <string name="settings_rom_guide">国产 ROM 指引：若一键成片在后台被系统杀掉，请在系统设置中为阅读器开启「自启动 / 后台运行 / 电池优化白名单」，并将本页视频通道 Key 配置完毕后再发起流水线。</string>
+    <string name="settings_image_title">图像通道（资产图 / 封面图）</string>
+    <string name="settings_image_desc">资产图与封面图由图像通道生成。此处可单独配置 Agnes 图像 Key（两站独立保存）；未单独配置时回退复用上方 Agnes Key（与视频通道同源）。</string>
+    <string name="settings_image_current">当前图像 Key：%1$s</string>
+    <string name="settings_image_key_label">Agnes 图像 Key（sk-…，独立于文本/视频 Key）</string>
+    <string name="settings_image_key_missing">请先填写 Agnes 图像 Key</string>
+    <string name="settings_image_key_saved">Agnes 图像 Key 已保存（独立通道）</string>
+    <string name="settings_image_save_btn">保存图像 Key</string>
+    <string name="settings_image_key_cleared">Agnes 图像 Key 已清除（回退共享 Key）</string>
+    <string name="settings_key_configured">已配置 %1$s</string>
+    <string name="settings_key_not_configured">未配置</string>
+    <string name="settings_image_key_standalone">已配置 %1$s（独立图像 Key）</string>
+    <string name="settings_image_key_fallback">未单独配置，回退共享 Key（%1$s）</string>
+
+    <!-- ============ 通用按钮 ============ -->
+    <string name="common_enter">进入</string>
+    <string name="common_delete">删除</string>
+    <string name="common_cancel">取消</string>
+    <string name="common_close">关闭</string>
+
+    <!-- ============ 引擎阶段标签（UI 层映射，引擎 JVM 模块不引 Android 资源） ============ -->
+    <string name="stage_s1_project">①项目</string>
+    <string name="stage_s2_import">②导入</string>
+    <string name="stage_s3_assets">③资产</string>
+    <string name="stage_s4_review">④评审</string>
+    <string name="stage_s5_storyboard">⑤分镜</string>
+    <string name="stage_s6_render">⑥渲染</string>
+    <string name="stage_s7_film">⑦成片</string>
+    <string name="stage5_extract_assets">①提取资产</string>
+    <string name="stage5_generate_images">②生成图像</string>
+    <string name="stage5_audit">③质量审计</string>
+    <string name="stage5_generate_storyboard">④生成分镜</string>
+    <string name="stage5_enqueue_render">⑤入队渲染</string>
+    <string name="stage5_done">✓ 完成</string>
+
+    <!-- ============ 项目页 (ProjectsPage) ============ -->
+    <string name="projects_title">AI短剧工厂</string>
+    <string name="projects_subtitle">创建项目 · 导入剧本 · 进入制作</string>
+    <string name="projects_empty_title">还没有项目</string>
+    <string name="projects_empty_subtitle">在「新建项目」卡里粘贴一段小说或剧本，AI 会帮你自动拆成资产、分镜、渲染并合成成片。</string>
+    <string name="project_meta">预算 %1$d 镜 · %2$s</string>
+    <string name="project_delete_title">删除项目「%1$s」？</string>
+    <string name="project_delete_text">项目的资产、分镜与渲染记录将一并删除，不可恢复。</string>
+    <string name="project_deleted">已删除项目「%1$s」</string>
+    <string name="project_new_title">新建项目</string>
+    <string name="project_mode_ai">AI 一键成片</string>
+    <string name="project_mode_manual">手动七阶段</string>
+    <string name="project_script_label">粘贴剧本（≥100 字）</string>
+    <string name="project_copyright">我已确认拥有剧本著作权或合法改编授权（导入版权确认 Q4）</string>
+    <string name="project_running">流水线运行中…</string>
+    <string name="project_one_click">一键成片</string>
+    <string name="project_created">已建项目并生成剧集 %1$s</string>
+    <string name="project_start_failed">启动失败：%1$s</string>
+    <string name="project_log_title">流水线日志 · %1$d 条（长按任意行复制全文）</string>
+    <string name="project_log_copied">流水线日志已复制（%1$d 条）</string>
+    <string name="project_manual_title">七阶段状态机</string>
+    <string name="project_no_project_gate">暂无项目，请先使用 AI 一键成片</string>
+    <string name="project_gate_assets">资产生成: %1$s</string>
+    <string name="project_gate_review">评审通过: %1$s</string>
+    <string name="project_gate_storyboard">分镜六铁律: %1$s</string>
+    <string name="project_gate_key">Key 有效: %1$s</string>
+    <string name="project_gate_budget">预算: %1$s</string>
+    <string name="project_gate_render">可渲染: %1$s</string>
+    <string name="project_gate_evaluated">已评估 %1$s 闸门</string>
+    <string name="project_gate_btn">评估当前项目闸门</string>
+    <string name="project_manual_desc">说明：S2 导入/S3 资产由 AI 流水线填充；S4 评审在资产页完成；S5 六铁律在渲染出队时复核；渲染在「渲染」页执行；S7 合并在「成片」页。</string>
+    <string name="model_config_title">模型配置</string>
+    <string name="model_config_ready">全部就绪</string>
+    <string name="model_config_missing">待配置：%1$s</string>
+    <string name="model_config_desc">模型 Key 决定 AI 对话 / 出图 / 渲染能否跑通。首次使用先到这里补 Key。</string>
+    <string name="model_config_manage">管理模型 Key</string>
+    <string name="model_config_configure">去配置模型 Key</string>
+    <string name="channel_text">文本</string>
+    <string name="channel_video">视频</string>
+    <string name="channel_image">图像</string>
+
+    <!-- ============ 资产页 (AssetsPage) ============ -->
+    <string name="assets_no_project_title">暂无项目</string>
+    <string name="assets_no_project_subtitle">请先在「项目」页用 AI 一键成片生成项目。</string>
+    <string name="assets_subtitle_tail">评审通过后可渲染（F04 硬门槛）</string>
+    <string name="assets_review_label">评审=</string>
+    <string name="assets_kind_character">角色</string>
+    <string name="assets_kind_scene">场景</string>
+    <string name="assets_kind_prop">道具</string>
+    <string name="assets_kind_local">本地</string>
+    <string name="assets_kind_image">图片</string>
+    <string name="assets_kind_video">视频</string>
+    <string name="assets_read_fail_image">图片读取失败（可能已无读权限）</string>
+    <string name="assets_read_fail_video">视频读取失败（可能已无读权限）</string>
+    <string name="assets_uploaded">已上传本地%1$s</string>
+    <string name="assets_capture_cancelled">已取消拍摄或拍摄失败</string>
+    <string name="assets_camera_permission">拍摄需要相机权限，请在系统设置中授予「相机」权限后重试</string>
+    <string name="assets_camera_failed">无法启动相机：%1$s</string>
+    <string name="assets_ref_read_fail">参考图读取失败（可能已无读权限）</string>
+    <string name="assets_ref_set_snack">参考图已设置，重生成时将作为图生图参考</string>
+    <string name="assets_filter_all">全部（%1$d）</string>
+    <string name="assets_filter_kind">%1$s（%2$d）</string>
+    <string name="assets_review_progress">评审进度：保留 %1$d/%2$d</string>
+    <string name="assets_review_all_kept">全部资产已保留，可标记评审通过进入渲染。</string>
+    <string name="assets_review_process">流程：保留全部资产 → 全部置 keep → 评审通过后可渲染。</string>
+    <string name="assets_all_kept_snack">已全部标记保留</string>
+    <string name="assets_no_episode">暂无剧集，无法标记评审通过</string>
+    <string name="assets_review_passed">评审已通过，可进入渲染</string>
+    <string name="assets_keep_all_btn">全部保留</string>
+    <string name="assets_review_pass_btn">标记评审通过</string>
+    <string name="assets_upload_title">本地上传</string>
+    <string name="assets_capture_btn">拍摄图片</string>
+    <string name="assets_album_image_btn">相册图片</string>
+    <string name="assets_album_video_btn">相册视频</string>
+    <string name="assets_empty_title">还没有资产</string>
+    <string name="assets_empty_subtitle">AI 流水线生成后资产会出现在这里。尚未生成时请回「项目」页用 AI 一键成片跑完整流程。</string>
+    <string name="assets_img_fail">图片加载失败</string>
+    <string name="assets_kept_snack">%1$s 已保留</string>
+    <string name="assets_regen_snack">%1$s 标记重生成</string>
+    <string name="assets_keep_btn">保留</string>
+    <string name="assets_regen_btn">重生成</string>
+    <string name="assets_ref_change_btn">更换参考图</string>
+    <string name="assets_ref_set_btn">设参考图</string>
+    <string name="assets_ref_marked">已挂参考图 ✓</string>
+    <string name="assets_ref_cleared">参考图已清除</string>
+    <string name="assets_ref_i2i">参考图（i2i）</string>
+    <string name="assets_ref_load_fail">参考图加载失败</string>
+    <string name="assets_no_preview">该资产暂无预览图</string>
+    <string name="assets_video_asset">视频资产：%1$s</string>
+    <string name="assets_ref_dialog_title">设置参考图（图生图 i2i）</string>
+    <string name="assets_ref_target">目标：%1$s（重生成时作为 input_image 参考）</string>
+    <string name="assets_ref_local_pick">从本地上传资产选择：</string>
+    <string name="assets_ref_pick_snack">已将「%1$s」设为参考图</string>
+    <string name="assets_ref_no_local">暂无本地上传图片资产，可从相册直接选图。</string>
+    <string name="assets_ref_album_btn">从相册选图</string>
+
+    <!-- ============ 剧集页 (EpisodePage) ============ -->
+    <string name="episodes_empty_title">还没有剧集</string>
+    <string name="episodes_empty_subtitle">项目内还没有剧集。请回到项目页用「AI 一键成片」导入剧本，AI 会自动分集并生成资产、分镜与渲染任务。</string>
+    <string name="episode_title">第%1$d集</string>
+    <string name="episode_script_ok">剧本 %1$d字%2$s</string>
+    <string name="episode_reviewed"> · 评审已通过</string>
+    <string name="episode_no_script">未导入剧本</string>
+    <string name="episode_add_hint">新增剧集请回项目页使用「AI 一键成片」重新导入剧本</string>
+    <string name="episode_add_btn">＋ 如何新增剧集</string>
+
+    <!-- ============ 分镜页 (StoryboardPage) ============ -->
+    <string name="storyboard_subtitle">第%1$s集 · 六铁律校验状态</string>
+    <string name="storyboard_script_title">剧本原文（%1$d字）</string>
+    <string name="storyboard_collapse">收起</string>
+    <string name="storyboard_expand">展开</string>
+    <string name="storyboard_queued_btn">已入队…</string>
+    <string name="storyboard_render_btn">渲染本集（六铁律复核）</string>
+    <string name="storyboard_no_episode">剧集不存在，请回项目页重新进入</string>
+    <string name="storyboard_enqueued">已入队渲染：%1$s</string>
+    <string name="storyboard_hint">渲染进度见「渲染」标签页；六铁律在出队时逐镜复核，不合规镜头会被 BLOCKED 并给出原因。</string>
+    <string name="storyboard_empty_title">还没有分镜</string>
+    <string name="storyboard_empty_subtitle">AI 一键成片会自动拆解镜头。回「项目」页用 AI 一键成片生成后，分镜将出现在这里。</string>
+    <string name="storyboard_action">动作：%1$s</string>
+    <string name="storyboard_dialogue">台词：「%1$s」</string>
+    <string name="storyboard_narration">旁白：%1$s</string>
+    <string name="storyboard_carry">承接：%1$s</string>
+    <string name="storyboard_assets">引用资产：%1$s</string>
+    <string name="storyboard_check_pass">校验通过</string>
+    <string name="storyboard_check_pending">待生成</string>
+    <string name="storyboard_check_fail">校验失败（%1$s）</string>
+
+    <!-- ============ 渲染前台服务通知 (RenderForegroundService) ============ -->
+    <string name="notify_channel_name">AI 短剧渲染</string>
+    <string name="notify_started_title">渲染队列已启动</string>
+    <string name="notify_started_text">等待任务…</string>
+    <string name="notify_progress">完成 %1$d/%2$d · 失败 %3$d%4$s</string>
+    <string name="notify_paused"> · 暂停(%1$s)</string>
+</resources>

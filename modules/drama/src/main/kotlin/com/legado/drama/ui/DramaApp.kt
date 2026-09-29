@@ -1,5 +1,6 @@
 package com.legado.drama.ui
 
+import androidx.annotation.StringRes
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Folder
@@ -34,7 +35,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import com.legado.drama.AppGraph
+import com.legado.drama.R
 import com.legado.drama.ui.components.DramaSnackbarController
 import com.legado.drama.ui.components.DramaSnackbarHost
 import com.legado.drama.ui.components.EmptyState
@@ -50,9 +53,10 @@ import com.legado.drama.ui.components.LocalDramaSnackbar
  * 故项目页「新建项目」卡内嵌 AI 一键成片入口（含手动七阶段评估双模式），
  * 其余页面结构与源工程一致。
  */
-enum class Page(val label: String) {
-    PROJECTS("项目"), EPISODES("剧集"), ASSETS("资产"), STORYBOARD("分镜"),
-    QUEUE("渲染"), LIBRARY("成片"), SETTINGS("设置");
+enum class Page(@StringRes val labelRes: Int) {
+    PROJECTS(R.string.page_projects), EPISODES(R.string.page_episodes), ASSETS(R.string.page_assets),
+    STORYBOARD(R.string.page_storyboard), QUEUE(R.string.page_queue), LIBRARY(R.string.page_library),
+    SETTINGS(R.string.page_settings);
 
     /** 是否在底栏常驻（收敛为 5 项；剧集/设置降级为子页） */
     val onBar: Boolean get() = this in listOf(PROJECTS, ASSETS, STORYBOARD, QUEUE, LIBRARY)
@@ -103,17 +107,17 @@ fun DramaApp() {
             topBar = {
                 // 子页（剧集/设置）显示返回箭头；主页面显示设置齿轮
                 TopAppBar(
-                    title = { Text(page.label, style = MaterialTheme.typography.titleMedium) },
+                    title = { Text(stringResource(page.labelRes), style = MaterialTheme.typography.titleMedium) },
                     navigationIcon = {
                         if (!page.onBar) IconButton(onClick = {
                             page = if (page == Page.SETTINGS) lastMainCache else page.ownerMain
-                        }) { Icon(Icons.Filled.ArrowBack, contentDescription = "返回") }
+                        }) { Icon(Icons.Filled.ArrowBack, contentDescription = stringResource(R.string.nav_back)) }
                     },
                     actions = {
                         if (page.onBar) IconButton(onClick = {
                             lastMainCache = page
                             page = Page.SETTINGS
-                        }) { Icon(Icons.Filled.Settings, contentDescription = "设置") }
+                        }) { Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.nav_settings)) }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.surface,
@@ -129,11 +133,12 @@ fun DramaApp() {
                     contentColor = MaterialTheme.colorScheme.onSurface,
                 ) {
                     for (p in Page.entries.filter { it.onBar }) {
+                        val label = stringResource(p.labelRes)
                         NavigationBarItem(
                             selected = page == p,
                             onClick = { page = p },
-                            icon = { Icon(pageIcon(p), contentDescription = p.label) },
-                            label = { Text(p.label) },
+                            icon = { Icon(pageIcon(p), contentDescription = label) },
+                            label = { Text(label) },
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
                                 selectedTextColor = MaterialTheme.colorScheme.primary,
@@ -173,7 +178,7 @@ fun DramaApp() {
                                 page = Page.ASSETS
                             },
                         )
-                    } ?: EmptyState(title = "项目已删除，请返回项目页重新选择")
+                    } ?: EmptyState(title = stringResource(R.string.app_project_gone))
                     Page.ASSETS -> AssetsPage(
                         graph = graph,
                         projectId = nav.currentProjectId ?: "",

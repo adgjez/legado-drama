@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -52,6 +54,7 @@ import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
 import com.bumptech.glide.integration.compose.placeholder
 import com.legado.drama.AppGraph
+import com.legado.drama.R
 import com.legado.drama.data.entity.AssetEntity
 import com.legado.drama.ui.components.DramaCard
 import com.legado.drama.ui.components.DramaFilterChip
@@ -70,13 +73,14 @@ import java.io.File
 /** 拍摄类型（决定权限请求后启动哪个相机 Launcher） */
 private enum class CaptureKind { IMAGE }
 
-/** 资产 kind → 中文标签（对齐源工程资产类型筛选） */
-private fun kindLabel(kind: String): String = when (kind) {
-    "character" -> "角色"
-    "scene" -> "场景"
-    "prop" -> "道具"
-    "local" -> "本地"
-    else -> kind
+/** 资产 kind → 标签资源 id（对齐源工程资产类型筛选） */
+@StringRes
+private fun kindLabelRes(kind: String): Int = when (kind) {
+    "character" -> R.string.assets_kind_character
+    "scene" -> R.string.assets_kind_scene
+    "prop" -> R.string.assets_kind_prop
+    "local" -> R.string.assets_kind_local
+    else -> R.string.assets_kind_local
 }
 
 /**
@@ -101,8 +105,8 @@ fun AssetsPage(
         Column(Modifier.fillMaxSize().padding(16.dp)) {
             EmptyState(
                 icon = { Icon(Icons.Filled.Image, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(40.dp)) },
-                title = "暂无项目",
-                subtitle = "请先在「项目」页用 AI 一键成片生成项目。",
+                title = stringResource(R.string.assets_no_project_title),
+                subtitle = stringResource(R.string.assets_no_project_subtitle),
             )
         }
         return
@@ -140,7 +144,9 @@ fun AssetsPage(
         uploadScope.launch {
             val internal = AssetFiles.copyToInternal(ctx, uri, isVideo = isVideo)
             if (internal == null) {
-                captureError = if (isVideo) "视频读取失败（可能已无读权限）" else "图片读取失败（可能已无读权限）"
+                captureError = ctx.getString(
+                    if (isVideo) R.string.assets_read_fail_video else R.string.assets_read_fail_image,
+                )
                 return@launch
             }
             graph.db.assetDao().upsert(
@@ -153,7 +159,7 @@ fun AssetsPage(
                     updatedAt = System.currentTimeMillis(),
                 ),
             )
-            snackbar.show("已上传本地$kind")
+            snackbar.show(ctx.getString(R.string.assets_uploaded, kind))
         }
     }
 
@@ -164,9 +170,9 @@ fun AssetsPage(
         val u = pendingCaptureUri
         pendingCaptureUri = null
         if (success && u != null) {
-            uploadVia(u, "图片", "拍摄图片", isVideo = false)
+            uploadVia(u, ctx.getString(R.string.assets_kind_image), ctx.getString(R.string.assets_capture_btn), isVideo = false)
         } else {
-            captureError = "已取消拍摄或拍摄失败"
+            captureError = ctx.getString(R.string.assets_capture_cancelled)
         }
     }
     // 拍摄权限请求：target 34+ 未授权直接启动相机会抛 SecurityException
@@ -178,15 +184,15 @@ fun AssetsPage(
             pendingCaptureUri = u
             cameraLauncher.launch(u)
         } else {
-            captureError = "拍摄需要相机权限，请在系统设置中授予「相机」权限后重试"
+            captureError = ctx.getString(R.string.assets_camera_permission)
         }
     }
     // 相册图片 / 相册视频（GetContent 免存储权限）
     val albumImageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { uploadVia(it, "图片", "相册图片", isVideo = false) }
+        uri?.let { uploadVia(it, ctx.getString(R.string.assets_kind_image), ctx.getString(R.string.assets_album_image_btn), isVideo = false) }
     }
     val albumVideoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { uploadVia(it, "视频", "相册视频", isVideo = true) }
+        uri?.let { uploadVia(it, ctx.getString(R.string.assets_kind_video), ctx.getString(R.string.assets_album_video_btn), isVideo = true) }
     }
 
     fun startCapture() {
@@ -197,7 +203,7 @@ fun AssetsPage(
             val u = captureUri()
             pendingCaptureUri = u
             runCatching { cameraLauncher.launch(u) }
-                .onFailure { captureError = "无法启动相机：${it.message ?: it.javaClass.simpleName}" }
+                .onFailure { captureError = ctx.getString(R.string.assets_camera_failed, it.message ?: it.javaClass.simpleName) }
         }
     }
 
@@ -217,11 +223,11 @@ fun AssetsPage(
             uploadScope.launch {
                 val internal = AssetFiles.copyToInternal(ctx, uri, isVideo = false)
                 if (internal == null) {
-                    captureError = "参考图读取失败（可能已无读权限）"
+                    captureError = ctx.getString(R.string.assets_ref_read_fail)
                     return@launch
                 }
                 graph.db.assetDao().setReferenceImage(targetId, internal, System.currentTimeMillis())
-                snackbar.show("参考图已设置，重生成时将作为图生图参考")
+                snackbar.show(ctx.getString(R.string.assets_ref_set_snack))
             }
         }
     }
@@ -233,7 +239,7 @@ fun AssetsPage(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item(span = { GridItemSpan(2) }) {
-            PageHeader(title = "资产库", subtitle = "${project.name} · 评审通过后可渲染（F04 硬门槛）")
+            PageHeader(title = stringResource(R.string.page_assets), subtitle = "${project.name} · ${stringResource(R.string.assets_subtitle_tail)}")
         }
         item(span = { GridItemSpan(2) }) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -241,7 +247,10 @@ fun AssetsPage(
                     DramaFilterChip(
                         selected = kindFilter == k,
                         onClick = { kindFilter = k },
-                        label = { Text(if (k == "全部") "全部（${assets.size}）" else "${kindLabel(k)}（${assets.count { it.kind == k }}）") },
+                        label = {
+                            if (k == "全部") Text(stringResource(R.string.assets_filter_all, assets.size))
+                            else Text(stringResource(R.string.assets_filter_kind, stringResource(kindLabelRes(k)), assets.count { it.kind == k }))
+                        },
                     )
                 }
             }
@@ -249,10 +258,10 @@ fun AssetsPage(
         item(span = { GridItemSpan(2) }) {
             DramaCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("评审进度：保留 $keptCount/${assets.size}", style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.assets_review_progress, keptCount, assets.size), style = MaterialTheme.typography.titleMedium)
                     Text(
-                        if (allKept) "全部资产已保留，可标记评审通过进入渲染。"
-                        else "流程：保留全部资产 → 全部置 keep → 评审通过后可渲染。",
+                        if (allKept) stringResource(R.string.assets_review_all_kept)
+                        else stringResource(R.string.assets_review_process),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
@@ -260,20 +269,20 @@ fun AssetsPage(
                         OutlinedButton(onClick = {
                             scope.launch {
                                 graph.db.assetDao().updateReviewState(assets.map { it.assetId }, "keep")
-                                snackbar.show("已全部标记保留")
+                                snackbar.show(ctx.getString(R.string.assets_all_kept_snack))
                             }
-                        }, enabled = assets.isNotEmpty()) { Text("全部保留") }
+                        }, enabled = assets.isNotEmpty()) { Text(stringResource(R.string.assets_keep_all_btn)) }
                         OutlinedButton(onClick = {
                             scope.launch {
                                 val ep = eps.firstOrNull()
                                 if (ep == null) {
-                                    snackbar.show("暂无剧集，无法标记评审通过")
+                                    snackbar.show(ctx.getString(R.string.assets_no_episode))
                                 } else {
                                     graph.db.episodeDao().setReviewPassed(ep.episodeId, true)
-                                    snackbar.show("评审已通过，可进入渲染")
+                                    snackbar.show(ctx.getString(R.string.assets_review_passed))
                                 }
                             }
-                        }, enabled = assets.isNotEmpty()) { Text("标记评审通过") }
+                        }, enabled = assets.isNotEmpty()) { Text(stringResource(R.string.assets_review_pass_btn)) }
                     }
                 }
             }
@@ -283,25 +292,25 @@ fun AssetsPage(
         item(span = { GridItemSpan(2) }) {
             DramaCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("本地上传", style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.assets_upload_title), style = MaterialTheme.typography.titleMedium)
                     captureError?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         IconActionButton(
-                            label = "拍摄图片",
+                            label = stringResource(R.string.assets_capture_btn),
                             icon = Icons.Filled.PhotoCamera,
                             onClick = { startCapture() },
                             modifier = Modifier.weight(1f),
                         )
                         IconActionButton(
-                            label = "相册图片",
+                            label = stringResource(R.string.assets_album_image_btn),
                             icon = Icons.Filled.PhotoLibrary,
                             onClick = { albumImageLauncher.launch("image/*") },
                             modifier = Modifier.weight(1f),
                         )
                         IconActionButton(
-                            label = "相册视频",
+                            label = stringResource(R.string.assets_album_video_btn),
                             icon = Icons.Filled.VideoLibrary,
                             onClick = { albumVideoLauncher.launch("video/*") },
                             modifier = Modifier.weight(1f),
@@ -314,8 +323,8 @@ fun AssetsPage(
             item(span = { GridItemSpan(2) }) {
                 EmptyState(
                     icon = { Icon(Icons.Filled.Image, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(40.dp)) },
-                    title = "还没有资产",
-                    subtitle = "AI 流水线生成后资产会出现在这里。尚未生成时请回「项目」页用 AI 一键成片跑完整流程。",
+                    title = stringResource(R.string.assets_empty_title),
+                    subtitle = stringResource(R.string.assets_empty_subtitle),
                 )
             }
         }
@@ -339,7 +348,7 @@ fun AssetsPage(
                                 loading = placeholder {},
                                 failure = placeholder {
                                     Text(
-                                        "图片加载失败",
+                                        stringResource(R.string.assets_img_fail),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.outline,
                                         textAlign = TextAlign.Center,
@@ -349,10 +358,10 @@ fun AssetsPage(
                         }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("${kindLabel(a.kind)}${a.poseRole?.let { " · $it" } ?: ""}", style = MaterialTheme.typography.titleSmall)
+                        Text("${stringResource(kindLabelRes(a.kind))}${a.poseRole?.let { " · $it" } ?: ""}", style = MaterialTheme.typography.titleSmall)
                     }
                     Text(
-                        "G1=${a.g1State} · 评审=${a.reviewState}",
+                        "G1=${a.g1State} · ${stringResource(R.string.assets_review_label)}${a.reviewState}",
                         style = MaterialTheme.typography.bodySmall,
                         color = when (a.reviewState) {
                             "keep" -> MaterialTheme.colorScheme.primary
@@ -368,17 +377,20 @@ fun AssetsPage(
                         OutlinedButton(onClick = {
                             scope.launch {
                                 graph.db.assetDao().updateReviewState(listOf(a.assetId), "keep")
-                                snackbar.show("${a.assetId.takeLast(6)} 已保留")
+                                snackbar.show(ctx.getString(R.string.assets_kept_snack, a.assetId.takeLast(6)))
                             }
-                        }, enabled = a.reviewState != "keep") { Text("保留") }
+                        }, enabled = a.reviewState != "keep") { Text(stringResource(R.string.assets_keep_btn)) }
                         OutlinedButton(onClick = {
                             scope.launch {
                                 graph.db.assetDao().updateReviewState(listOf(a.assetId), "regen")
-                                snackbar.show("${a.assetId.takeLast(6)} 标记重生成")
+                                snackbar.show(ctx.getString(R.string.assets_regen_snack, a.assetId.takeLast(6)))
                             }
-                        }, enabled = a.reviewState != "regen") { Text("重生成") }
+                        }, enabled = a.reviewState != "regen") { Text(stringResource(R.string.assets_regen_btn)) }
                         OutlinedButton(onClick = { refTargetId = a.assetId }) {
-                            Text(if (a.referenceImageUri != null) "更换参考图" else "设参考图")
+                            Text(
+                                if (a.referenceImageUri != null) stringResource(R.string.assets_ref_change_btn)
+                                else stringResource(R.string.assets_ref_set_btn),
+                            )
                         }
                     }
                     if (a.referenceImageUri != null) {
@@ -388,16 +400,16 @@ fun AssetsPage(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                "已挂参考图 ✓",
+                                stringResource(R.string.assets_ref_marked),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.tertiary,
                             )
                             TextButton(onClick = {
                                 scope.launch {
                                     graph.db.assetDao().setReferenceImage(a.assetId, null, System.currentTimeMillis())
-                                    snackbar.show("参考图已清除")
+                                    snackbar.show(ctx.getString(R.string.assets_ref_cleared))
                                 }
-                            }) { Text("清除", style = MaterialTheme.typography.labelSmall) }
+                            }) { Text(stringResource(R.string.settings_key_clear_btn), style = MaterialTheme.typography.labelSmall) }
                         }
                     }
                 }
@@ -412,30 +424,30 @@ fun AssetsPage(
         AlertDialog(
             onDismissRequest = { previewAsset = null },
             confirmButton = {
-                OutlinedButton(onClick = { previewAsset = null }) { Text("关闭") }
+                OutlinedButton(onClick = { previewAsset = null }) { Text(stringResource(R.string.common_close)) }
             },
-            title = { Text(kindLabel(pa.kind)) },
+            title = { Text(stringResource(kindLabelRes(pa.kind))) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     // 已挂参考图：预览中同时展示参考图（本地资产预览 + i2i 确认）
                     if (pa.referenceImageUri != null) {
-                        Text("参考图（i2i）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
+                        Text(stringResource(R.string.assets_ref_i2i), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
                         GlideImage(
                             model = pa.referenceImageUri,
-                            contentDescription = "参考图",
+                            contentDescription = stringResource(R.string.assets_ref_i2i),
                             modifier = Modifier.fillMaxWidth().height(96.dp),
                             contentScale = ContentScale.Fit,
                             loading = placeholder {},
-                            failure = placeholder { Text("参考图加载失败", color = MaterialTheme.colorScheme.error) },
+                            failure = placeholder { Text(stringResource(R.string.assets_ref_load_fail), color = MaterialTheme.colorScheme.error) },
                         )
                     }
                     when {
-                        model == null -> Text("该资产暂无预览图", color = MaterialTheme.colorScheme.outline)
+                        model == null -> Text(stringResource(R.string.assets_no_preview), color = MaterialTheme.colorScheme.outline)
                         isVideo -> Column {
                             Text(pa.prompt.take(48), style = MaterialTheme.typography.bodyMedium)
                             Spacer(Modifier.height(8.dp))
                             Text(
-                                "视频资产：${model.substringAfterLast('/')}",
+                                stringResource(R.string.assets_video_asset, model.substringAfterLast('/')),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.outline,
                             )
@@ -447,7 +459,7 @@ fun AssetsPage(
                             contentScale = ContentScale.Fit,
                             loading = placeholder {},
                             failure = placeholder {
-                                Text("图片加载失败", color = MaterialTheme.colorScheme.error)
+                                Text(stringResource(R.string.assets_img_fail), color = MaterialTheme.colorScheme.error)
                             },
                         )
                     }
@@ -463,16 +475,16 @@ fun AssetsPage(
         val localPicks = assets.filter { it.fileUri != null && !it.fileUri!!.endsWith(".mp4") && it.assetId != targetId }
         AlertDialog(
             onDismissRequest = { refTargetId = null },
-            title = { Text("设置参考图（图生图 i2i）") },
+            title = { Text(stringResource(R.string.assets_ref_dialog_title)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "目标：${target?.prompt?.take(20) ?: targetId.takeLast(8)}（重生成时作为 input_image 参考）",
+                        stringResource(R.string.assets_ref_target, target?.prompt?.take(20) ?: targetId.takeLast(8)),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
                     if (localPicks.isNotEmpty()) {
-                        Text("从本地上传资产选择：", style = MaterialTheme.typography.labelMedium)
+                        Text(stringResource(R.string.assets_ref_local_pick), style = MaterialTheme.typography.labelMedium)
                         // 最多展示 4 个，避免 Dialog 过高
                         localPicks.take(4).forEach { pick ->
                             OutlinedButton(
@@ -480,7 +492,7 @@ fun AssetsPage(
                                     refTargetId = null
                                     scope.launch {
                                         graph.db.assetDao().setReferenceImage(targetId, pick.fileUri, System.currentTimeMillis())
-                                        snackbar.show("已将「${pick.prompt.take(12)}」设为参考图")
+                                        snackbar.show(ctx.getString(R.string.assets_ref_pick_snack, pick.prompt.take(12)))
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth(),
@@ -489,15 +501,15 @@ fun AssetsPage(
                             }
                         }
                     } else {
-                        Text("暂无本地上传图片资产，可从相册直接选图。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                        Text(stringResource(R.string.assets_ref_no_local), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                     }
                 }
             },
             confirmButton = {
-                OutlinedButton(onClick = { refImageLauncher.launch("image/*") }) { Text("从相册选图") }
+                OutlinedButton(onClick = { refImageLauncher.launch("image/*") }) { Text(stringResource(R.string.assets_ref_album_btn)) }
             },
             dismissButton = {
-                OutlinedButton(onClick = { refTargetId = null }) { Text("取消") }
+                OutlinedButton(onClick = { refTargetId = null }) { Text(stringResource(R.string.common_cancel)) }
             },
         )
     }

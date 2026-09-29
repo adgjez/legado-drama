@@ -10,6 +10,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.legado.drama.R
 import com.legado.drama.engine.queue.QueueSnapshot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +31,13 @@ class RenderForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("渲染队列已启动", "等待任务…"))
+        startForeground(
+            NOTIFICATION_ID,
+            buildNotification(
+                getString(R.string.notify_started_title),
+                getString(R.string.notify_started_text),
+            ),
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -46,13 +53,13 @@ class RenderForegroundService : Service() {
         val graph = com.legado.drama.AppGraph.get(this)
         scope.launch {
             graph.renderQueue.state.collectLatest { snap: QueueSnapshot ->
+                val paused = snap.pausedReason?.let { getString(R.string.notify_paused, it) } ?: ""
                 val text = buildString {
-                    append("完成 ${snap.completed}/${snap.total} · 失败 ${snap.failed}")
-                    snap.pausedReason?.let { append(" · 暂停($it)") }
+                    append(getString(R.string.notify_progress, snap.completed, snap.total, snap.failed, paused))
                     snap.lastMessage?.let { append(" · $it") }
                 }
                 val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                nm.notify(NOTIFICATION_ID, buildNotification("AI 短剧渲染", text))
+                nm.notify(NOTIFICATION_ID, buildNotification(getString(R.string.notify_channel_name), text))
                 // 全部终态 → 停服务
                 if (snap.pending == 0 && snap.submittedInFlight == 0 && snap.pausedReason == null && snap.total > 0 && snap.completed == snap.total) {
                     stopSelf()
@@ -64,7 +71,7 @@ class RenderForegroundService : Service() {
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID, "AI 短剧渲染", NotificationManager.IMPORTANCE_LOW,
+                CHANNEL_ID, getString(R.string.notify_channel_name), NotificationManager.IMPORTANCE_LOW,
             )
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
                 .createNotificationChannel(channel)

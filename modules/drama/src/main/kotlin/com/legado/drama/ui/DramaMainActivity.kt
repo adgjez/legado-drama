@@ -22,10 +22,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush.Companion.verticalGradient
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.legado.drama.AppGraph
 import com.legado.drama.DramaBridge
+import com.legado.drama.R
 import com.legado.drama.ui.theme.DramaNeon
 import com.legado.drama.ui.theme.DramaTheme
 import kotlinx.coroutines.delay
@@ -88,19 +90,19 @@ private fun SplashContent() {
             modifier = Modifier.padding(horizontal = 32.dp),
         ) {
             Text(
-                text = "AI 短剧工厂",
+                text = stringResource(R.string.splash_title),
                 style = MaterialTheme.typography.displaySmall,
                 color = DramaNeon.SplashText,
                 textAlign = TextAlign.Center,
             )
             Text(
-                text = "开源你的梦境",
+                text = stringResource(R.string.splash_tagline),
                 style = MaterialTheme.typography.headlineSmall,
                 color = DramaNeon.SplashText.copy(alpha = 0.85f),
                 textAlign = TextAlign.Center,
             )
             Text(
-                text = "剧本 · 资产 · 分镜 · 渲染 · 成片",
+                text = stringResource(R.string.splash_steps),
                 style = MaterialTheme.typography.bodyMedium,
                 color = DramaNeon.SplashText.copy(alpha = 0.6f),
                 textAlign = TextAlign.Center,

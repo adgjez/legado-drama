@@ -28,8 +28,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.legado.drama.AppGraph
+import com.legado.drama.R
 import com.legado.drama.data.entity.ShotEntity
 import com.legado.drama.service.RenderForegroundService
 import com.legado.drama.ui.components.DramaCard
@@ -50,6 +52,7 @@ fun StoryboardPage(graph: AppGraph, episodeId: String) {
     val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
     val shots by graph.db.shotDao().observeByEpisode(episodeId).collectAsState(initial = emptyList())
     val snackbar = LocalDramaSnackbar.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     var scriptText by remember { mutableStateOf<String?>(null) }
     var showScript by remember { mutableStateOf(false) }
     var queued by remember { mutableStateOf(false) }
@@ -67,7 +70,10 @@ fun StoryboardPage(graph: AppGraph, episodeId: String) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            PageHeader(title = "分镜", subtitle = "第${episodeId.substringAfterLast("ep", "?")}集 · 六铁律校验状态")
+            PageHeader(
+                title = stringResource(R.string.page_storyboard),
+                subtitle = stringResource(R.string.storyboard_subtitle, episodeId.substringAfterLast("ep", "?")),
+            )
         }
 
         // 剧本原文折叠卡（对齐源工程：进入分镜页即加载本集剧本，折叠展示）
@@ -87,9 +93,13 @@ fun StoryboardPage(graph: AppGraph, episodeId: String) {
                                     modifier = Modifier.weight(1f),
                                 ) {
                                     Icon(Icons.Filled.List, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-                                    Text("剧本原文（${script.length}字）", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(stringResource(R.string.storyboard_script_title, script.length), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                                Text(if (showScript) "收起" else "展开", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                Text(
+                                    stringResource(if (showScript) R.string.storyboard_collapse else R.string.storyboard_expand),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
                             }
                             if (showScript) {
                                 Text(
@@ -107,23 +117,23 @@ fun StoryboardPage(graph: AppGraph, episodeId: String) {
 
         item {
             HeroButton(
-                text = if (queued) "已入队…" else "渲染本集（六铁律复核）",
+                text = stringResource(if (queued) R.string.storyboard_queued_btn else R.string.storyboard_render_btn),
                 onClick = {
                     scope.launch {
                         val ep = graph.db.episodeDao().get(episodeId)
                         if (ep == null) {
-                            snackbar.show("剧集不存在，请回项目页重新进入")
+                            snackbar.show(context.getString(R.string.storyboard_no_episode))
                         } else {
                             RenderForegroundService.start(graph.appContext, episodeId)
                             queued = true
-                            snackbar.show("已入队渲染：$episodeId")
+                            snackbar.show(context.getString(R.string.storyboard_enqueued, episodeId))
                         }
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
             if (queued) {
-                Text("渲染进度见「渲染」标签页；六铁律在出队时逐镜复核，不合规镜头会被 BLOCKED 并给出原因。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                Text(stringResource(R.string.storyboard_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
             }
         }
 
@@ -131,8 +141,8 @@ fun StoryboardPage(graph: AppGraph, episodeId: String) {
             item {
                 EmptyState(
                     icon = { Icon(Icons.Filled.List, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(40.dp)) },
-                    title = "还没有分镜",
-                    subtitle = "AI 一键成片会自动拆解镜头。回「项目」页用 AI 一键成片生成后，分镜将出现在这里。",
+                    title = stringResource(R.string.storyboard_empty_title),
+                    subtitle = stringResource(R.string.storyboard_empty_subtitle),
                 )
             }
         }
@@ -143,11 +153,11 @@ fun StoryboardPage(graph: AppGraph, episodeId: String) {
                         Text("#${shot.shotNo}", style = MaterialTheme.typography.titleSmall)
                         ShotCheckStatus(shot.sbCheck)
                     }
-                    shot.action?.let { Text("动作：$it", style = MaterialTheme.typography.bodyMedium) }
-                    shot.dialogue?.let { Text("台词：「$it」", style = MaterialTheme.typography.bodySmall) }
-                    shot.narration?.let { Text("旁白：$it", style = MaterialTheme.typography.bodySmall) }
-                    shot.carryOver?.let { Text("承接：$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline) }
-                    Text("引用资产：${shot.firstAssetIds}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                    shot.action?.let { Text(stringResource(R.string.storyboard_action, it), style = MaterialTheme.typography.bodyMedium) }
+                    shot.dialogue?.let { Text(stringResource(R.string.storyboard_dialogue, it), style = MaterialTheme.typography.bodySmall) }
+                    shot.narration?.let { Text(stringResource(R.string.storyboard_narration, it), style = MaterialTheme.typography.bodySmall) }
+                    shot.carryOver?.let { Text(stringResource(R.string.storyboard_carry, it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline) }
+                    Text(stringResource(R.string.storyboard_assets, shot.firstAssetIds), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                 }
             }
         }
@@ -159,13 +169,13 @@ fun StoryboardPage(graph: AppGraph, episodeId: String) {
 private fun ShotCheckStatus(sbCheck: String) {
     val (icon, text, tint) = when {
         sbCheck == "pass" -> Triple(
-            Icons.Filled.CheckCircle, "校验通过", MaterialTheme.colorScheme.primary,
+            Icons.Filled.CheckCircle, stringResource(R.string.storyboard_check_pass), MaterialTheme.colorScheme.primary,
         )
         sbCheck == "pending" -> Triple(
-            Icons.Filled.DateRange, "待生成", MaterialTheme.colorScheme.outline,
+            Icons.Filled.DateRange, stringResource(R.string.storyboard_check_pending), MaterialTheme.colorScheme.outline,
         )
         else -> Triple(
-            Icons.Filled.Warning, "校验失败（$sbCheck）", MaterialTheme.colorScheme.error,
+            Icons.Filled.Warning, stringResource(R.string.storyboard_check_fail, sbCheck), MaterialTheme.colorScheme.error,
         )
     }
     Row(

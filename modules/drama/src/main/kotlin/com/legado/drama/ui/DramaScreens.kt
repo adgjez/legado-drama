@@ -38,10 +38,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.legado.drama.AppGraph
 import com.legado.drama.ProviderPrefs
+import com.legado.drama.R
 import com.legado.drama.data.entity.FinishedFilmEntity
 import com.legado.drama.data.entity.ProviderConfigEntity
 import com.legado.drama.data.entity.RenderTaskEntity
@@ -96,11 +98,11 @@ fun QueuePage(graph: AppGraph) {
         }
     }
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        PageHeader(title = "渲染队列", subtitle = "镜头状态机实时刷新 · 可暂停/恢复")
+        PageHeader(title = stringResource(R.string.queue_title), subtitle = stringResource(R.string.queue_subtitle))
         EmptyState(
             icon = { Icon(Icons.Filled.Movie, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(40.dp)) },
-            title = "暂无剧集",
-            subtitle = "暂无渲染任务。请先在「项目」页用 AI 一键成片生成剧集。",
+            title = stringResource(R.string.queue_no_episode_title),
+            subtitle = stringResource(R.string.queue_no_episode_subtitle),
         )
     }
 }
@@ -113,9 +115,10 @@ private fun QueueBody(
     scope: kotlinx.coroutines.CoroutineScope,
 ) {
     val snackbar = LocalDramaSnackbar.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     var budgetConfirm by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        PageHeader(title = "渲染队列", subtitle = "镜头状态机实时刷新 · 可暂停/恢复")
+        PageHeader(title = stringResource(R.string.queue_title), subtitle = stringResource(R.string.queue_subtitle))
 
         // ---- 总进度卡（对齐源工程 QueuePage 总进度 DramaCard） ----
         DramaCard(Modifier.fillMaxWidth()) {
@@ -124,7 +127,7 @@ private fun QueueBody(
                     ?: snapshot.episodeId
                 if (snapshot.total > 0) {
                     Text(
-                        "第${epDisplay}集 · ${snapshot.completed}/${snapshot.total} 镜完成",
+                        stringResource(R.string.queue_episode_progress, epDisplay ?: "-", snapshot.completed, snapshot.total),
                         style = MaterialTheme.typography.titleMedium,
                     )
                     LinearProgressIndicator(
@@ -132,29 +135,35 @@ private fun QueueBody(
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Text(
-                        "完成 ${snapshot.completed} · 失败 ${snapshot.failed} · 排队 ${snapshot.pending} · 处理中 ${snapshot.submittedInFlight}",
+                        stringResource(
+                            R.string.queue_progress_summary,
+                            snapshot.completed, snapshot.failed, snapshot.pending, snapshot.submittedInFlight,
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
                     snapshot.pausedReason?.let {
-                        Text("暂停原因：${pauseLabel(it)}", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        Text(stringResource(R.string.queue_paused_reason, stringResource(pauseLabelRes(it))), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }
                     snapshot.lastMessage?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall)
                     }
                 } else {
-                    Text("队列空闲", style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.queue_idle), style = MaterialTheme.typography.titleMedium)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val resumeText = if (snapshot.pausedReason != null) {
+                        stringResource(R.string.queue_resume_btn)
+                    } else stringResource(R.string.queue_start_btn)
                     PrimaryButton(
-                        text = if (snapshot.pausedReason != null) "恢复渲染" else "开始渲染",
+                        text = resumeText,
                         onClick = {
                             val reason = snapshot.pausedReason
                             if (reason == null) {
                                 val ep = snapshot.episodeId
                                 if (ep != null) {
                                     RenderForegroundService.start(graph.appContext, ep)
-                                    snackbar.show("渲染服务已启动")
+                                    snackbar.show(context.getString(R.string.queue_service_started))
                                 }
                             } else if (reason == "budget") {
                                 // 预算达上限：必须显式确认放行（引擎 resume(confirmedByUser=true)）
@@ -162,7 +171,7 @@ private fun QueueBody(
                             } else {
                                 graph.scope.launch {
                                     graph.renderQueue.resume(confirmedByUser = false)
-                                    snackbar.show("已恢复渲染")
+                                    snackbar.show(context.getString(R.string.queue_resumed))
                                 }
                             }
                         },
@@ -170,8 +179,8 @@ private fun QueueBody(
                     )
                     OutlinedButton(onClick = {
                         graph.scope.launch { graph.renderQueue.pause("user") }
-                        snackbar.show("已暂停渲染")
-                    }, enabled = snapshot.total > 0) { Text("暂停") }
+                        snackbar.show(context.getString(R.string.queue_paused))
+                    }, enabled = snapshot.total > 0) { Text(stringResource(R.string.queue_pause_btn)) }
                 }
             }
         }
@@ -180,19 +189,19 @@ private fun QueueBody(
         if (budgetConfirm) {
             AlertDialog(
                 onDismissRequest = { budgetConfirm = false },
-                title = { Text("预算已达上限") },
-                text = { Text("已暂停：预算达上限，等待确认。继续渲染将超出预设上限并产生额外费用。\n\n确认继续吗？") },
+                title = { Text(stringResource(R.string.queue_budget_title)) },
+                text = { Text(stringResource(R.string.queue_budget_text)) },
                 confirmButton = {
                     TextButton(onClick = {
                         graph.scope.launch {
                             graph.renderQueue.resume(confirmedByUser = true)
-                            snackbar.show("已确认超限放行，恢复渲染")
+                            snackbar.show(context.getString(R.string.queue_budget_confirm_snack))
                         }
                         budgetConfirm = false
-                    }) { Text("继续渲染（超限放行）") }
+                    }) { Text(stringResource(R.string.queue_budget_confirm_btn)) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { budgetConfirm = false }) { Text("暂不渲染") }
+                    TextButton(onClick = { budgetConfirm = false }) { Text(stringResource(R.string.queue_budget_dismiss_btn)) }
                 },
             )
         }
@@ -200,8 +209,8 @@ private fun QueueBody(
         if (tasks.isEmpty()) {
             EmptyState(
                 icon = { Icon(Icons.Filled.Movie, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(40.dp)) },
-                title = "暂无渲染任务",
-                subtitle = "episode=${snapshot.episodeId ?: "-"} · 渲染任务入队后会在这里实时刷新",
+                title = stringResource(R.string.queue_empty_title),
+                subtitle = stringResource(R.string.queue_empty_subtitle, snapshot.episodeId ?: "-"),
             )
         } else {
             // ---- 单镜任务列表（对齐源工程 QueuePage 镜状态卡） ----
@@ -210,21 +219,21 @@ private fun QueueBody(
                     DramaCard(Modifier.fillMaxWidth()) {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("镜 ${t.shotId.takeLast(4)}", style = MaterialTheme.typography.titleSmall)
-                                Text("状态 ${shotStateLabel(t.state)}", color = shotStateColor(t.state), style = MaterialTheme.typography.bodySmall)
+                                Text(stringResource(R.string.queue_shot_title, t.shotId.takeLast(4)), style = MaterialTheme.typography.titleSmall)
+                                Text(stringResource(R.string.queue_shot_state, stringResource(shotStateLabelRes(t.state))), color = shotStateColor(t.state), style = MaterialTheme.typography.bodySmall)
                             }
                             t.failReason?.let {
                                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                             }
                             t.blockedReason?.let {
-                                Text("阻塞：$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                                Text(stringResource(R.string.queue_shot_blocked, it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
                             }
                             // 单镜取消（对齐源工程 QueuePage 取消按钮，cancelShot 终止该镜）
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(onClick = {
                                     graph.renderQueue.cancelShot(t.shotId)
-                                    snackbar.show("镜 ${t.shotId.takeLast(4)} 已取消")
-                                }) { Text("取消") }
+                                    snackbar.show(context.getString(R.string.queue_shot_cancelled, t.shotId.takeLast(4)))
+                                }) { Text(stringResource(R.string.queue_cancel_btn)) }
                             }
                         }
                     }
@@ -234,22 +243,25 @@ private fun QueueBody(
     }
 }
 
-private fun pauseLabel(reason: String): String = when (reason) {
-    "budget" -> "预算达上限，等待确认"
-    "network" -> "网络异常"
-    "auth" -> "API Key 失效，请到设置页更新"
-    "review" -> "资产评审未通过"
-    "noshots" -> "本集没有分镜"
-    else -> reason
+@androidx.annotation.StringRes
+private fun pauseLabelRes(reason: String): Int = when (reason) {
+    "budget" -> R.string.queue_pause_budget
+    "network" -> R.string.queue_pause_network
+    "auth" -> R.string.queue_pause_auth
+    "review" -> R.string.queue_pause_review
+    "noshots" -> R.string.queue_pause_noshots
+    "user" -> R.string.queue_pause_user
+    else -> R.string.queue_pause_budget
 }
 
-private fun shotStateLabel(state: String): String = when (state) {
-    ShotState.PENDING.name -> "排队"
-    ShotState.SUBMITTED.name -> "渲染中"
-    ShotState.COMPLETED.name -> "已完成"
-    ShotState.FAILED.name -> "失败"
-    ShotState.BLOCKED.name -> "阻塞"
-    else -> state
+@androidx.annotation.StringRes
+private fun shotStateLabelRes(state: String): Int = when (state) {
+    ShotState.PENDING.name -> R.string.queue_state_pending
+    ShotState.SUBMITTED.name -> R.string.queue_state_submitted
+    ShotState.COMPLETED.name -> R.string.queue_state_completed
+    ShotState.FAILED.name -> R.string.queue_state_failed
+    ShotState.BLOCKED.name -> R.string.queue_state_blocked
+    else -> R.string.queue_state_pending
 }
 
 @Composable
@@ -266,6 +278,7 @@ private fun shotStateColor(state: String) = when (state) {
 @Composable
 fun LibraryPage(graph: AppGraph) {
     val snackbar = LocalDramaSnackbar.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val films by graph.db.finishedFilmDao().observeAll().collectAsState(initial = emptyList())
     val projects by graph.db.projectDao().observeAll().collectAsState(initial = emptyList())
@@ -273,7 +286,7 @@ fun LibraryPage(graph: AppGraph) {
     var deleteTarget by remember { mutableStateOf<FinishedFilmEntity?>(null) }
 
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        PageHeader(title = "成片库", subtitle = "已合成剧集 · 可播放与分享")
+        PageHeader(title = stringResource(R.string.library_title), subtitle = stringResource(R.string.library_subtitle))
 
         if (project != null) {
             val eps by graph.db.episodeDao().observeByProject(project.projectId).collectAsState(initial = emptyList())
@@ -285,21 +298,25 @@ fun LibraryPage(graph: AppGraph) {
                     renderTasks.all { it.state == ShotState.COMPLETED.name && !it.localFileUri.isNullOrBlank() }
                 DramaCard(Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("当前剧集合成", style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(R.string.library_current_assemble), style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "第${ep.epNo}集（${eps.size} 集 · 已渲染 ${renderTasks.count { it.state == ShotState.COMPLETED.name }}/${renderTasks.size} 镜）",
+                            stringResource(
+                                R.string.library_episode_summary,
+                                ep.epNo, eps.size,
+                                renderTasks.count { it.state == ShotState.COMPLETED.name }, renderTasks.size,
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.outline,
                         )
                         PrimaryButton(
-                            text = if (allCompleted) "合成整集成片" else "合成（需全部单镜渲染完成）",
+                            text = if (allCompleted) stringResource(R.string.library_assemble_ready) else stringResource(R.string.library_assemble_waiting),
                             onClick = {
                                 scope.launch {
                                     val clips = renderTasks
                                         .filter { it.state == ShotState.COMPLETED.name && !it.localFileUri.isNullOrBlank() }
                                         .mapNotNull { File(it.localFileUri!!).takeIf { f -> f.exists() && f.length() > 0 } }
                                     if (clips.isEmpty()) {
-                                        snackbar.show("没有已落盘的单镜片段，请先完成渲染")
+                                        snackbar.show(context.getString(R.string.library_no_clips))
                                         return@launch
                                     }
                                     val output = File(graph.appContext.filesDir, "movies/${ep.episodeId}.mp4").apply { parentFile?.mkdirs() }
@@ -318,13 +335,13 @@ fun LibraryPage(graph: AppGraph) {
                                                     updatedAt = System.currentTimeMillis(),
                                                 ),
                                             )
-                                            snackbar.show("成片完成：${r.strategy.label}")
+                                            snackbar.show(context.getString(R.string.library_assemble_done, r.strategy.label))
                                         }
                                         is MovieAssembler.AssembleResult.Segmented -> {
-                                            snackbar.show("分段导出 ${r.parts.size} 段（尚未合并）")
+                                            snackbar.show(context.getString(R.string.library_assemble_segmented, r.parts.size))
                                         }
                                         is MovieAssembler.AssembleResult.Failure -> {
-                                            snackbar.show("合成失败：${r.message}")
+                                            snackbar.show(context.getString(R.string.library_assemble_failed, r.message))
                                         }
                                     }
                                 }
@@ -340,8 +357,8 @@ fun LibraryPage(graph: AppGraph) {
         if (films.isEmpty()) {
             EmptyState(
                 icon = { Icon(Icons.Filled.VideoLibrary, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(40.dp)) },
-                title = "还没有成片",
-                subtitle = "渲染完成后在「成片」页合成整集，成片将出现在这里。",
+                title = stringResource(R.string.library_empty_title),
+                subtitle = stringResource(R.string.library_empty_subtitle),
             )
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -349,9 +366,9 @@ fun LibraryPage(graph: AppGraph) {
                     DramaCard(Modifier.fillMaxWidth()) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("第${f.filmId.substringAfterLast("_", f.filmId)}集 · ${f.strategy}", style = MaterialTheme.typography.titleSmall)
+                                Text(stringResource(R.string.library_film_title, f.filmId.substringAfterLast("_", f.filmId), f.strategy), style = MaterialTheme.typography.titleSmall)
                                 Text(
-                                    "时长 ${"%.1f".format(f.durationSeconds)}s · ${f.fileSize / 1024}KB",
+                                    stringResource(R.string.library_film_meta, f.durationSeconds, f.fileSize / 1024),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.outline,
                                 )
@@ -362,9 +379,9 @@ fun LibraryPage(graph: AppGraph) {
                                 color = MaterialTheme.colorScheme.outline,
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = { playFilm(graph, f) }) { Text("播放") }
-                                OutlinedButton(onClick = { shareFilm(graph, f) }) { Text("分享") }
-                                OutlinedButton(onClick = { deleteTarget = f }) { Text("删除") }
+                                Button(onClick = { playFilm(graph, f) }) { Text(stringResource(R.string.library_play_btn)) }
+                                OutlinedButton(onClick = { shareFilm(graph, f) }) { Text(stringResource(R.string.library_share_btn)) }
+                                OutlinedButton(onClick = { deleteTarget = f }) { Text(stringResource(R.string.library_delete_btn)) }
                             }
                         }
                     }
@@ -376,20 +393,20 @@ fun LibraryPage(graph: AppGraph) {
     deleteTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
-            title = { Text("删除成片") },
-            text = { Text("确定删除 ${target.filmId.take(8)}… 吗？此操作不可恢复。") },
+            title = { Text(stringResource(R.string.library_delete_title)) },
+            text = { Text(stringResource(R.string.library_delete_text, target.filmId.take(8))) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
                         graph.db.finishedFilmDao().delete(target.filmId)
                         File(target.fileUri).takeIf { it.exists() }?.delete()
-                        snackbar.show("成片已删除")
+                        snackbar.show(context.getString(R.string.library_deleted))
                     }
                     deleteTarget = null
-                }) { Text("删除") }
+                }) { Text(stringResource(R.string.common_delete)) }
             },
             dismissButton = {
-                TextButton(onClick = { deleteTarget = null }) { Text("取消") }
+                TextButton(onClick = { deleteTarget = null }) { Text(stringResource(R.string.common_cancel)) }
             },
         )
     }
@@ -419,7 +436,7 @@ private fun shareFilm(graph: AppGraph, f: FinishedFilmEntity) {
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    context.startActivity(Intent.createChooser(intent, "分享成片"))
+    context.startActivity(Intent.createChooser(intent, graph.appContext.getString(R.string.library_share_chooser)))
 }
 
 /**
@@ -430,6 +447,7 @@ private fun shareFilm(graph: AppGraph, f: FinishedFilmEntity) {
 @Composable
 fun SettingsPage(graph: AppGraph) {
     val snackbar = LocalDramaSnackbar.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     var agnesKey by remember { mutableStateOf("") }
     var deepseekKey by remember { mutableStateOf("") }
@@ -449,7 +467,12 @@ fun SettingsPage(graph: AppGraph) {
         if (!custom) {
             baseUrl = if (target == AgnesRegion.CHINA) AgnesProvider.CHINA_BASE_URL else ProviderPrefs.DEFAULT_AGNES_BASE
         }
-        snackbar.show("Agnes 站点已切换：${if (target == AgnesRegion.CHINA) "中国站" else "国际站"}（两站 Key 独立）")
+        snackbar.show(
+            context.getString(
+                R.string.settings_agnes_switched,
+                if (target == AgnesRegion.CHINA) context.getString(R.string.settings_agnes_cn) else context.getString(R.string.settings_agnes_intl),
+            ),
+        )
     }
 
     Column(
@@ -459,17 +482,24 @@ fun SettingsPage(graph: AppGraph) {
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-            PageHeader(title = "设置", subtitle = "模型供应商 · Key 加密存储 · 渲染参数")
+            PageHeader(title = stringResource(R.string.settings_title), subtitle = stringResource(R.string.settings_subtitle))
 
             // ── Agnes 站点分池（对齐源工程 AgnesRegion 卡片：两站 Key 独立） ──
             DramaCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Agnes 站点", style = MaterialTheme.typography.titleMedium)
-                        Text("当前：${if (agnesRegion == AgnesRegion.CHINA) "中国站" else "国际站"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        Text(stringResource(R.string.settings_agnes_title), style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            stringResource(
+                                R.string.settings_agnes_current,
+                                stringResource(if (agnesRegion == AgnesRegion.CHINA) R.string.settings_agnes_cn else R.string.settings_agnes_intl),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
                     }
                     Text(
-                        "国际站（apihub.agnes-ai.com）与中国站（api.agnes-ai.cn）Key 相互独立、分开保存；切换站点后请确认该站已填写对应 Key。",
+                        stringResource(R.string.settings_agnes_desc),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
@@ -477,12 +507,12 @@ fun SettingsPage(graph: AppGraph) {
                         DramaFilterChip(
                             selected = agnesRegion == AgnesRegion.INTERNATIONAL,
                             onClick = { switchAgnesRegion(AgnesRegion.INTERNATIONAL) },
-                            label = { Text("国际站") },
+                            label = { Text(stringResource(R.string.settings_agnes_intl)) },
                         )
                         DramaFilterChip(
                             selected = agnesRegion == AgnesRegion.CHINA,
                             onClick = { switchAgnesRegion(AgnesRegion.CHINA) },
-                            label = { Text("中国站") },
+                            label = { Text(stringResource(R.string.settings_agnes_cn)) },
                         )
                     }
                 }
@@ -492,8 +522,12 @@ fun SettingsPage(graph: AppGraph) {
             DramaCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("文本模型（剧本/分镜大脑）", style = MaterialTheme.typography.titleMedium)
-                        Text("生效：${graph.textRouter.activeTextModelId()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        Text(stringResource(R.string.settings_text_model_title), style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            stringResource(R.string.settings_text_model_active, graph.textRouter.activeTextModelId()),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
                     }
                     val registered = remember(agnesRegion) { graph.textRouter.registeredTextModels() }
                     var activeModelId by remember { mutableStateOf(graph.textRouter.activeTextModelId()) }
@@ -507,7 +541,7 @@ fun SettingsPage(graph: AppGraph) {
                                     activeModelId = model.modelId
                                     scope.launch {
                                         graph.textRouter.setActiveTextModel(model.modelId)
-                                        snackbar.show("文本模型已切换：${model.label}")
+                                        snackbar.show(context.getString(R.string.settings_text_model_switched, model.label))
                                     }
                                 }),
                         ) {
@@ -516,9 +550,9 @@ fun SettingsPage(graph: AppGraph) {
                                 Text(model.label, style = MaterialTheme.typography.bodyMedium)
                                 Text(
                                     buildString {
-                                        append("模型 ${model.modelId}")
-                                        model.keyMasked?.let { append(" · Key $it") } ?: append(" · 未配置 Key")
-                                        if (model.isVerified) append(" · 已验证")
+                                        append(context.getString(R.string.settings_model_id, model.modelId))
+                                        model.keyMasked?.let { append(context.getString(R.string.settings_model_key, it)) } ?: append(context.getString(R.string.settings_model_no_key))
+                                        if (model.isVerified) append(context.getString(R.string.settings_model_verified))
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.outline,
@@ -537,7 +571,7 @@ fun SettingsPage(graph: AppGraph) {
                                     "agnes" -> agnesKey = it
                                 }
                             },
-                            label = { Text("${model.label} Key（sk-…）") },
+                            label = { Text(context.getString(R.string.settings_model_key_label, model.label)) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                         )
@@ -550,7 +584,7 @@ fun SettingsPage(graph: AppGraph) {
                                         else -> ""
                                     }.trim()
                                     if (key.isBlank()) {
-                                        snackbar.show("请先填写 ${model.label} 的 Key")
+                                        snackbar.show(context.getString(R.string.settings_key_missing, model.label))
                                         return@launch
                                     }
                                     // Key 维度按站点分池（Agnes：国际站 agnes / 中国站 agnes-cn；DeepSeek 原样）
@@ -589,12 +623,22 @@ fun SettingsPage(graph: AppGraph) {
                                             graph.db.providerConfigDao().upsert(it.copy(isVerified = true))
                                         }
                                         graph.refreshConfigs()
-                                        snackbar.show("${model.label} Key 已保存并连通（${r.getOrThrow().latencyMs ?: "-"}ms）")
+                                        snackbar.show(
+                                            context.getString(
+                                                R.string.settings_key_saved_ok,
+                                                model.label, r.getOrThrow().latencyMs ?: "-",
+                                            ),
+                                        )
                                     } else {
-                                        snackbar.show("${model.label} Key 已保存，连通失败：${r.exceptionOrNull()?.message}")
+                                        snackbar.show(
+                                            context.getString(
+                                                R.string.settings_key_saved_fail,
+                                                model.label, r.exceptionOrNull()?.message ?: "?",
+                                            ),
+                                        )
                                     }
                                 }
-                            }) { Text("保存并验证") }
+                            }) { Text(stringResource(R.string.settings_key_save_btn)) }
                             OutlinedButton(onClick = {
                                 scope.launch {
                                     val scopedId = agnesScopedConfigId(model.providerId, graph.providerPrefs.agnesRegion)
@@ -604,9 +648,9 @@ fun SettingsPage(graph: AppGraph) {
                                         graph.db.providerConfigDao().delete("$scopedId-video")
                                     }
                                     graph.refreshConfigs()
-                                    snackbar.show("${model.label} Key 已清除")
+                                    snackbar.show(context.getString(R.string.settings_key_cleared, model.label))
                                 }
-                            }) { Text("清除") }
+                            }) { Text(stringResource(R.string.settings_key_clear_btn)) }
                         }
                     }
                 }
@@ -615,30 +659,30 @@ fun SettingsPage(graph: AppGraph) {
             // ── 视频通道（Agnes） ──
             DramaCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("视频通道（Agnes 出片）", style = MaterialTheme.typography.titleMedium)
-                    Text("视频 Key 与上方「Agnes 文本」共用同一把 Key，保存/验证后在文本模型区块完成。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                    Text("当前视频 Key：${agnesSummary(configs)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text(stringResource(R.string.settings_video_title), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.settings_video_desc), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    Text(stringResource(R.string.settings_video_current, agnesSummary(context, configs)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
                     OutlinedTextField(
                         value = baseUrl,
                         onValueChange = { baseUrl = it },
-                        label = { Text("Agnes Base URL") },
+                        label = { Text(stringResource(R.string.settings_base_url_label)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
                     OutlinedTextField(
                         value = interval,
                         onValueChange = { interval = it },
-                        label = { Text("视频提交限速间隔（秒）") },
+                        label = { Text(stringResource(R.string.settings_interval_label)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
                     Button(onClick = {
                         graph.providerPrefs.videoIntervalMs = interval.toLongOrNull()?.times(1000) ?: 120_000L
                         graph.providerPrefs.agnesBaseUrl = baseUrl.trim()
-                        snackbar.show("设置已保存")
-                    }) { Text("保存设置") }
+                        snackbar.show(context.getString(R.string.settings_saved))
+                    }) { Text(stringResource(R.string.settings_save_btn)) }
                     Text(
-                        "国产 ROM 指引：若一键成片在后台被系统杀掉，请在系统设置中为阅读器开启「自启动 / 后台运行 / 电池优化白名单」，并将本页视频通道 Key 配置完毕后再发起流水线。",
+                        stringResource(R.string.settings_rom_guide),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
@@ -648,21 +692,21 @@ fun SettingsPage(graph: AppGraph) {
             // ── 图像通道（对齐源工程 ImageModelBlock：独立 Agnes 图像 Key） ──
             DramaCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("图像通道（资产图 / 封面图）", style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.settings_image_title), style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "资产图与封面图由图像通道生成。此处可单独配置 Agnes 图像 Key（两站独立保存）；未单独配置时回退复用上方 Agnes Key（与视频通道同源）。",
+                        stringResource(R.string.settings_image_desc),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
                     Text(
-                        "当前图像 Key：${imageSummary(graph, agnesRegion)}",
+                        stringResource(R.string.settings_image_current, imageSummary(context, graph, agnesRegion)),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
                     OutlinedTextField(
                         value = agnesImageKey,
                         onValueChange = { agnesImageKey = it },
-                        label = { Text("Agnes 图像 Key（sk-…，独立于文本/视频 Key）") },
+                        label = { Text(stringResource(R.string.settings_image_key_label)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
@@ -671,7 +715,7 @@ fun SettingsPage(graph: AppGraph) {
                             scope.launch {
                                 val key = agnesImageKey.trim()
                                 if (key.isBlank()) {
-                                    snackbar.show("请先填写 Agnes 图像 Key")
+                                    snackbar.show(context.getString(R.string.settings_image_key_missing))
                                     return@launch
                                 }
                                 val scopedImageId = graph.agnesImageKeyId()
@@ -690,36 +734,40 @@ fun SettingsPage(graph: AppGraph) {
                                     ),
                                 )
                                 graph.refreshConfigs()
-                                snackbar.show("Agnes 图像 Key 已保存（独立通道）")
+                                snackbar.show(context.getString(R.string.settings_image_key_saved))
                             }
-                        }) { Text("保存图像 Key") }
+                        }) { Text(stringResource(R.string.settings_image_save_btn)) }
                         OutlinedButton(onClick = {
                             scope.launch {
                                 val scopedImageId = graph.agnesImageKeyId()
                                 graph.keyVault.delete(scopedImageId)
                                 graph.db.providerConfigDao().delete("$scopedImageId-image")
                                 graph.refreshConfigs()
-                                snackbar.show("Agnes 图像 Key 已清除（回退共享 Key）")
+                                snackbar.show(context.getString(R.string.settings_image_key_cleared))
                             }
-                        }) { Text("清除") }
+                        }) { Text(stringResource(R.string.settings_key_clear_btn)) }
                     }
                 }
             }
         }
 }
 
-private fun agnesSummary(configs: List<ProviderConfigEntity>): String =
-    configs.firstOrNull { it.providerId == "agnes" && it.channel == "video" }?.keyMasked?.let { "已配置 $it" } ?: "未配置"
+private fun agnesSummary(context: android.content.Context, configs: List<ProviderConfigEntity>): String =
+    configs.firstOrNull { it.providerId == "agnes" && it.channel == "video" }?.keyMasked?.let {
+        context.getString(R.string.settings_key_configured, it)
+    } ?: context.getString(R.string.settings_key_not_configured)
 
 /**
  * 图像通道 Key 状态：优先展示独立图像 Key（agnes-image 分池掩码），
  * 未单独配置时提示回退复用共享 Agnes Key（与 generateImage 运行时取 Key 链一致）。
  */
-private fun imageSummary(graph: AppGraph, region: AgnesRegion): String {
+private fun imageSummary(context: android.content.Context, graph: AppGraph, region: AgnesRegion): String {
     val imageMasked = graph.keyVault.masked(graph.agnesImageKeyId())
-    if (imageMasked.isNotEmpty()) return "已配置 $imageMasked（独立图像 Key）"
+    if (imageMasked.isNotEmpty()) return context.getString(R.string.settings_image_key_standalone, imageMasked)
     val sharedMasked = graph.keyVault.masked(
         agnesScopedConfigId(AgnesProvider.PROVIDER_ID, region),
     )
-    return if (sharedMasked.isNotEmpty()) "未单独配置，回退共享 Key（$sharedMasked）" else "未配置"
+    return if (sharedMasked.isNotEmpty()) {
+        context.getString(R.string.settings_image_key_fallback, sharedMasked)
+    } else context.getString(R.string.settings_key_not_configured)
 }
