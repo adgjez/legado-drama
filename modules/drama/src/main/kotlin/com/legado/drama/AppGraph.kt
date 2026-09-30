@@ -20,6 +20,7 @@ import com.legado.drama.engine.router.TextModelRouter
 import com.legado.drama.engine.security.KeyVault
 import com.legado.drama.provider.AgnesProvider
 import com.legado.drama.provider.AgnesRegion
+import com.legado.drama.provider.MiMoProvider
 import com.legado.drama.provider.OpenAiCompatTextProvider
 import com.legado.drama.provider.agnesScopedConfigId
 import com.legado.drama.router.TextModelRouterImpl
@@ -98,6 +99,11 @@ class AppGraph private constructor(context: Context) {
 
     val openAiTextProvider: OpenAiCompatTextProvider by lazy {
         OpenAiCompatTextProvider(keyVault)
+    }
+
+    /** 小米 MiMo 文本通道（P0-②：tp-/sk- 前缀自动选站，mimo-v2.6-pro） */
+    val mimoProvider: MiMoProvider by lazy {
+        MiMoProvider(keyVault)
     }
 
     /** 渲染队列（单例，供 UI/Service/AiOrchestrator 共享） */

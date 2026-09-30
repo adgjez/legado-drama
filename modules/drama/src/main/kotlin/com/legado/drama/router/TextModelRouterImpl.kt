@@ -7,6 +7,7 @@ import com.legado.drama.engine.router.DeepSeekDefaults
 import com.legado.drama.engine.router.TextModelRouter
 import com.legado.drama.provider.AgnesProvider
 import com.legado.drama.provider.AgnesRegion
+import com.legado.drama.provider.MiMoProvider
 import com.legado.drama.provider.agnesScopedConfigId
 
 /**
@@ -36,6 +37,14 @@ class TextModelRouterImpl(
             baseUrl = agnesBaseUrl(),
             keyMasked = graph.keyVault.masked(agnesConfigIdKey()).ifBlank { null },
             isVerified = graph.isTextProviderVerified(AgnesProvider.PROVIDER_ID),
+        ),
+        TextModelRouter.TextModelEntry(
+            modelId = MiMoProvider.MODEL,
+            label = "MiMo 文本 Pro",
+            providerId = MiMoProvider.PROVIDER_ID,
+            baseUrl = MiMoProvider.BASE_URL,
+            keyMasked = graph.keyVault.masked(MiMoProvider.PROVIDER_ID).ifBlank { null },
+            isVerified = graph.isTextProviderVerified(MiMoProvider.PROVIDER_ID),
         ),
     )
 
@@ -79,6 +88,7 @@ class TextModelRouterImpl(
 
     override suspend fun resolve(modelId: String): TextProvider = when {
         modelId == DeepSeekDefaults.MODEL || modelId.startsWith("deepseek") -> graph.openAiTextProvider
+        modelId == MiMoProvider.MODEL || modelId.startsWith("mimo") -> graph.mimoProvider
         else -> graph.agnesProvider // agnes / agnes-2.5-flash → Agnes 文本通道
     }
 }

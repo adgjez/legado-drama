@@ -451,6 +451,7 @@ fun SettingsPage(graph: AppGraph) {
     val scope = rememberCoroutineScope()
     var agnesKey by remember { mutableStateOf("") }
     var deepseekKey by remember { mutableStateOf("") }
+    var mimoKey by remember { mutableStateOf("") }
     var agnesImageKey by remember { mutableStateOf("") }
     var interval by remember { mutableStateOf(graph.providerPrefs.videoIntervalMs.toString()) }
     var baseUrl by remember { mutableStateOf(graph.providerPrefs.agnesBaseUrl) }
@@ -563,12 +564,14 @@ fun SettingsPage(graph: AppGraph) {
                             value = when (model.providerId) {
                                 "deepseek" -> deepseekKey
                                 "agnes" -> agnesKey
+                                "mimo" -> mimoKey
                                 else -> ""
                             },
                             onValueChange = {
                                 when (model.providerId) {
                                     "deepseek" -> deepseekKey = it
                                     "agnes" -> agnesKey = it
+                                    "mimo" -> mimoKey = it
                                 }
                             },
                             label = { Text(context.getString(R.string.settings_model_key_label, model.label)) },
@@ -581,6 +584,7 @@ fun SettingsPage(graph: AppGraph) {
                                     val key = when (model.providerId) {
                                         "deepseek" -> deepseekKey
                                         "agnes" -> agnesKey
+                                        "mimo" -> mimoKey
                                         else -> ""
                                     }.trim()
                                     if (key.isBlank()) {
