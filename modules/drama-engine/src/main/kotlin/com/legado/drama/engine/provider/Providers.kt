@@ -75,6 +75,8 @@ interface VideoProvider {
 data class ChatMessage(
     val role: String,  // system / user / assistant
     val content: String,
+    /** 可选图像入参（data URI 或 http URL）；非空时 Provider 按 OpenAI 视觉格式组装 content（对齐源 Models.ChatMessage） */
+    val imageUrl: String? = null,
 )
 
 @Serializable

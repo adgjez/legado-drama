@@ -8,6 +8,7 @@ import com.legado.drama.engine.gate.AssetGate
 import com.legado.drama.engine.gate.DefaultAssetGate
 import com.legado.drama.engine.gate.DefaultEraDetector
 import com.legado.drama.engine.gate.DefaultFidelityGate
+import com.legado.drama.engine.gate.DefaultG2Auditor
 import com.legado.drama.engine.gate.DefaultStoryboardGate
 import com.legado.drama.engine.gate.EraDetector
 import com.legado.drama.engine.gate.FidelityGate
@@ -72,7 +73,14 @@ class AppGraph private constructor(context: Context) {
 
     val checkpointStore: CheckpointStore by lazy { RoomCheckpointStore(db.renderTaskDao()) }
 
-    val assetGate: AssetGate by lazy { DefaultAssetGate(g2Auditor = null) }
+    val assetGate: AssetGate by lazy { DefaultAssetGate(g2Auditor = g2Auditor) }
+
+    /** G2 多模态质量审计（P0-① 接线：Agnes 文本通道带图 chat，defects 非空直接拒，重试 ≤3） */
+    val g2Auditor: DefaultG2Auditor by lazy {
+        DefaultG2Auditor(
+            textProvider = agnesProvider,
+        )
+    }
 
     val storyboardGate: StoryboardGate by lazy {
         DefaultStoryboardGate { assetIdsInProject() }

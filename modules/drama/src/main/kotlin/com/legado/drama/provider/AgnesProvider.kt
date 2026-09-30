@@ -188,7 +188,20 @@ class AgnesProvider(
                 setBody(
                     mapOf(
                         "model" to (req.model.ifBlank { TEXT_MODEL }),
-                        "messages" to req.messages.map { mapOf("role" to it.role, "content" to it.content) },
+                        // 多模态：imageUrl 非空时按 OpenAI 视觉格式组装 content（对齐源 AgnesProvider）
+                        "messages" to req.messages.map { m ->
+                            if (m.imageUrl != null) {
+                                mapOf(
+                                    "role" to m.role,
+                                    "content" to listOf(
+                                        mapOf("type" to "text", "text" to m.content),
+                                        mapOf("type" to "image_url", "image_url" to mapOf("url" to m.imageUrl)),
+                                    ),
+                                )
+                            } else {
+                                mapOf("role" to m.role, "content" to m.content)
+                            }
+                        },
                         "max_tokens" to (req.maxTokens ?: 1024),
                     ),
                 )
