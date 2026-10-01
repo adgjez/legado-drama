@@ -42,12 +42,18 @@ class ProviderPrefs(context: Context) {
         get() = sp.getString(KEY_ACTIVE_TEXT_MODEL, DeepSeekDefaults.MODEL) ?: DeepSeekDefaults.MODEL
         set(value) = sp.edit().putString(KEY_ACTIVE_TEXT_MODEL, value).apply()
 
+    /** P0-③：当前激活的视频供应商 id（默认 agnes，随时互切；VideoProviderRouter 持久化挂载点） */
+    var activeVideoProviderId: String
+        get() = sp.getString(KEY_ACTIVE_VIDEO_PROVIDER, "agnes") ?: "agnes"
+        set(value) = sp.edit().putString(KEY_ACTIVE_VIDEO_PROVIDER, value).apply()
+
     companion object {
         const val KEY_VIDEO_INTERVAL = "video_interval_ms"
         const val KEY_AGNES_BASE = "agnes_base_url"
         const val KEY_AGNES_REGION = "agnes_region"
         const val KEY_LAST_MODE = "last_mode"
         const val KEY_ACTIVE_TEXT_MODEL = "active_text_model"
+        const val KEY_ACTIVE_VIDEO_PROVIDER = "active_video_provider"
 
         /** Agnes 直连基址（S1 实测通过；决策 Q1 解除代理层） */
         const val DEFAULT_AGNES_BASE = "https://apihub.agnes-ai.com"

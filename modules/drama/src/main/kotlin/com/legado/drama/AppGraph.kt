@@ -22,6 +22,7 @@ import com.legado.drama.provider.AgnesProvider
 import com.legado.drama.provider.AgnesRegion
 import com.legado.drama.provider.MiMoProvider
 import com.legado.drama.provider.OpenAiCompatTextProvider
+import com.legado.drama.provider.VideoProviderRouter
 import com.legado.drama.provider.agnesScopedConfigId
 import com.legado.drama.router.TextModelRouterImpl
 import com.legado.drama.security.AndroidKeyVault
@@ -108,8 +109,17 @@ class AppGraph private constructor(context: Context) {
 
     /** 渲染队列（单例，供 UI/Service/AiOrchestrator 共享） */
     val renderQueue: com.legado.drama.engine.queue.RenderQueue by lazy {
+        // P0-③：视频通道按激活供应商动态路由（agnes 默认 / kling），
+        // 经 RoutingVideoProvider 适配器每次调用时解析最新激活实例，切换即时生效无需重建队列。
+        VideoProviderRouter.init(
+            keyVault = keyVault,
+            regionProvider = { providerPrefs.agnesRegion },
+            agnesProviderProvider = { agnesProvider },
+            activeIdProvider = { providerPrefs.activeVideoProviderId },
+            activeIdSetter = { id -> providerPrefs.activeVideoProviderId = id },
+        )
         com.legado.drama.orchestration.DefaultRenderQueue(
-            videoProvider = agnesProvider,
+            videoProvider = routingVideoProvider,
             checkpoint = checkpointStore,
             budget = budgetGuard,
             shotDao = db.shotDao(),
@@ -159,6 +169,42 @@ class AppGraph private constructor(context: Context) {
 
     /** 文本模型路由（T014 §2.3 Q4：多模型并存、随时互切） */
     val textRouter: TextModelRouter by lazy { TextModelRouterImpl(this) }
+
+    /**
+     * P0-③：视频通道路由适配器 —— 每次 delegate 到 VideoProviderRouter.resolve()，
+     * 保证切换激活供应商后排程中的 submitVideo/pollResult 走新适配器。
+     */
+    private val routingVideoProvider: com.legado.drama.engine.provider.VideoProvider by lazy {
+        object : com.legado.drama.engine.provider.VideoProvider {
+            override val id: String get() = VideoProviderRouter.activeVideoProviderId()
+            override suspend fun validateKey(key: String) = VideoProviderRouter.resolve().validateKey(key)
+            override fun listModels(): List<com.legado.drama.engine.provider.ModelSpec> =
+                VideoProviderRouter.resolve().listModels()
+            override suspend fun submitVideo(req: com.legado.drama.engine.provider.VideoSubmitRequest): String =
+                VideoProviderRouter.resolve().submitVideo(req)
+            override suspend fun pollResult(providerTaskId: String) =
+                VideoProviderRouter.resolve().pollResult(providerTaskId)
+        }
+    }
+
+    /** P0-③：当前激活的视频供应商 id（设置页展示/切换用） */
+    fun activeVideoProviderId(): String = VideoProviderRouter.activeVideoProviderId()
+
+    /** P0-③：切换激活的视频供应商（持久化；切换后渲染队列下次提交即生效） */
+    fun setActiveVideoProvider(id: String) {
+        VideoProviderRouter.setActive(id)
+    }
+
+    /** P0-③：激活供应商的 Key 维度（设置页保存/清除用；agnes 走 region 分池，kling 走 "kling-video"） */
+    fun videoConfigId(): String =
+        VideoProviderRouter.configIdFor(activeVideoProviderId(), providerPrefs.agnesRegion)
+
+    /** P0-③：按指定供应商 id 解析（设置页测试连通/保存时用候选 Key） */
+    fun resolveVideoProviderFor(providerId: String, overrideKey: String? = null) =
+        VideoProviderRouter.resolveFor(providerId, overrideKey)
+
+    /** P0-③：激活供应商 Key 是否就绪（视频通道就绪闸门） */
+    fun hasVideoKey(): Boolean = VideoProviderRouter.activeKeyReady()
 
     /** provider_configs 缓存（registeredTextModels 同步读；设置页保存后 refreshConfigs 刷新） */
     @Volatile

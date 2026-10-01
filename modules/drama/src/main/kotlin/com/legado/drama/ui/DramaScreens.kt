@@ -52,6 +52,7 @@ import com.legado.drama.engine.queue.QueueSnapshot
 import com.legado.drama.engine.queue.ShotState
 import com.legado.drama.provider.AgnesProvider
 import com.legado.drama.provider.AgnesRegion
+import com.legado.drama.provider.VideoProviderRouter
 import com.legado.drama.provider.agnesScopedConfigId
 import com.legado.drama.ui.components.DramaFilterChip
 import com.legado.drama.service.RenderForegroundService
@@ -660,31 +661,113 @@ fun SettingsPage(graph: AppGraph) {
                 }
             }
 
-            // ── 视频通道（Agnes） ──
+            // ── 视频通道（P0-③ 供应商路由：Agnes 默认 / Kling，Key 独立分池） ──
             DramaCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    var videoProviderId by remember {
+                        mutableStateOf(graph.activeVideoProviderId())
+                    }
+                    var klingKey by remember { mutableStateOf("") }
                     Text(stringResource(R.string.settings_video_title), style = MaterialTheme.typography.titleMedium)
                     Text(stringResource(R.string.settings_video_desc), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                    Text(stringResource(R.string.settings_video_current, agnesSummary(context, configs)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                    OutlinedTextField(
-                        value = baseUrl,
-                        onValueChange = { baseUrl = it },
-                        label = { Text(stringResource(R.string.settings_base_url_label)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
+                    Text(
+                        stringResource(
+                            R.string.settings_video_active_hint,
+                            stringResource(
+                                if (videoProviderId == "kling") R.string.settings_video_provider_kling
+                                else R.string.settings_video_provider_agnes,
+                            ),
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
                     )
-                    OutlinedTextField(
-                        value = interval,
-                        onValueChange = { interval = it },
-                        label = { Text(stringResource(R.string.settings_interval_label)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                    )
-                    Button(onClick = {
-                        graph.providerPrefs.videoIntervalMs = interval.toLongOrNull()?.times(1000) ?: 120_000L
-                        graph.providerPrefs.agnesBaseUrl = baseUrl.trim()
-                        snackbar.show(context.getString(R.string.settings_saved))
-                    }) { Text(stringResource(R.string.settings_save_btn)) }
+                    // ── 供应商选择（RadioButton 列表，对齐源工程 SettingsPage 供应商区块） ──
+                    listOf(
+                        "agnes" to stringResource(R.string.settings_video_provider_agnes),
+                        "kling" to stringResource(R.string.settings_video_provider_kling),
+                    ).forEach { (providerId, label) ->
+                        val selected = providerId == videoProviderId
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(selected = selected, onClick = {
+                                    videoProviderId = providerId
+                                    graph.setActiveVideoProvider(providerId)
+                                    snackbar.show(context.getString(R.string.settings_video_switched, label))
+                                }),
+                        ) {
+                            RadioButton(selected = selected, onClick = null)
+                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    // ── Kling 独立 Key 输入（configId = "kling-video" 分池） ──
+                    if (videoProviderId == "kling") {
+                        OutlinedTextField(
+                            value = klingKey,
+                            onValueChange = { klingKey = it },
+                            label = { Text(stringResource(R.string.settings_video_kling_key_label)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = {
+                                scope.launch {
+                                    val key = klingKey.trim()
+                                    if (key.isBlank()) {
+                                        snackbar.show(context.getString(R.string.settings_video_kling_key_missing))
+                                        return@launch
+                                    }
+                                    val configId = VideoProviderRouter.configIdFor("kling", graph.providerPrefs.agnesRegion)
+                                    graph.keyVault.save(configId, "kling", key)
+                                    klingKey = ""
+                                    graph.db.providerConfigDao().upsert(
+                                        ProviderConfigEntity(
+                                            configId = "$configId-video",
+                                            channel = "video",
+                                            providerId = "kling",
+                                            model = "video",
+                                            keyMasked = graph.keyVault.masked(configId),
+                                            isVerified = false,
+                                            updatedAt = System.currentTimeMillis(),
+                                        ),
+                                    )
+                                    graph.refreshConfigs()
+                                    snackbar.show(context.getString(R.string.settings_video_kling_key_saved))
+                                }
+                            }) { Text(stringResource(R.string.settings_key_save_btn)) }
+                            OutlinedButton(onClick = {
+                                scope.launch {
+                                    val configId = VideoProviderRouter.configIdFor("kling", graph.providerPrefs.agnesRegion)
+                                    graph.keyVault.delete(configId)
+                                    graph.db.providerConfigDao().delete("$configId-video")
+                                    graph.refreshConfigs()
+                                    snackbar.show(context.getString(R.string.settings_video_kling_key_cleared))
+                                }
+                            }) { Text(stringResource(R.string.settings_key_clear_btn)) }
+                        }
+                    } else {
+                        // ── Agnes 通道：Base URL + 限速间隔（Key 与文本模型区块共用 agnes 池） ──
+                        OutlinedTextField(
+                            value = baseUrl,
+                            onValueChange = { baseUrl = it },
+                            label = { Text(stringResource(R.string.settings_base_url_label)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        OutlinedTextField(
+                            value = interval,
+                            onValueChange = { interval = it },
+                            label = { Text(stringResource(R.string.settings_interval_label)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        Button(onClick = {
+                            graph.providerPrefs.videoIntervalMs = interval.toLongOrNull()?.times(1000) ?: 120_000L
+                            graph.providerPrefs.agnesBaseUrl = baseUrl.trim()
+                            snackbar.show(context.getString(R.string.settings_saved))
+                        }) { Text(stringResource(R.string.settings_save_btn)) }
+                    }
                     Text(
                         stringResource(R.string.settings_rom_guide),
                         style = MaterialTheme.typography.bodySmall,
@@ -755,11 +838,6 @@ fun SettingsPage(graph: AppGraph) {
             }
         }
 }
-
-private fun agnesSummary(context: android.content.Context, configs: List<ProviderConfigEntity>): String =
-    configs.firstOrNull { it.providerId == "agnes" && it.channel == "video" }?.keyMasked?.let {
-        context.getString(R.string.settings_key_configured, it)
-    } ?: context.getString(R.string.settings_key_not_configured)
 
 /**
  * 图像通道 Key 状态：优先展示独立图像 Key（agnes-image 分池掩码），
