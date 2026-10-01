@@ -1,5 +1,7 @@
 package com.legado.drama.engine.provider
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.Serializable
 
 /**
@@ -97,10 +99,19 @@ data class ChatResponse(
     val finishReason: String? = null,
 )
 
-interface TextProvider { // writer / spec 提取 / G2 审计 / 忠实性比对
+interface TextProvider { // writer / spec 提取 / G2 审计 / 忠实性比对 / 对话
     val id: String
     suspend fun validateKey(key: String): Result<ConnectionInfo>
     suspend fun chat(req: ChatRequest): ChatResponse // enable_thinking=false 约定
+
+    /**
+     * 流式对话（可选能力）：返回逐段文本 Flow。
+     * 默认实现回退为非流式 [chat] 单块（保持现有 Provider 无需改动即可支持流式壳）；
+     * 支持流式的 Provider 应重写为逐段 emit，协议约定与 [chat] 一致（enable_thinking=false）。
+     */
+    fun streamChat(req: ChatRequest): Flow<String> = flow {
+        emit(chat(req).content)
+    }
 }
 
 // ───────────────────────── 图像通道 ─────────────────────────

@@ -1,0 +1,167 @@
+package com.legado.drama.engine.orchestrate
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * AI 模式流式对话 Brief 状态机回归单测。
+ * 验证「问询→回答→确认→确认」全流程，以及中途自由补充、取消、轮数限制。
+ */
+class BriefDialogueTest {
+
+    private fun fresh() = BriefDialogue(maxRounds = 6, nowMs = { 0L })
+
+    private val longScript = "东汉末年群雄并起天下大乱英雄辈出故事绵延百年权谋争斗不断上演于此江湖朝堂风云变幻英雄落寞美人迟暮。".repeat(3)
+
+    @Test
+    fun `start 进入问询并先问剧本`() {
+        val d = fresh()
+        d.start()
+        assertEquals(BriefState.QUESTIONING, d.state.value)
+        assertTrue("nextQuestion 不为空", d.nextQuestion.value != null)
+        assertTrue("先问剧本", d.nextQuestion.value!!.contains("剧本"))
+        assertTrue(d.history.value.any { it.side == DialogueTurn.Side.AI })
+    }
+
+    @Test
+    fun `剧本太短被驳回继续问剧本`() {
+        val d = fresh()
+        d.start()
+        d.onAnswer(BriefField.SCRIPT, "太短了")
+        assertEquals(BriefState.QUESTIONING, d.state.value)
+        assertTrue("提醒≥100字", d.nextQuestion.value!!.contains("100"))
+        assertEquals(0, d.brief.value.rawScript.length)
+    }
+
+    @Test
+    fun `粘入足够长剧本后转问时代`() {
+        val d = fresh()
+        d.start()
+        d.onAnswer(BriefField.SCRIPT, longScript)
+        assertEquals(BriefState.QUESTIONING, d.state.value)
+        assertTrue("转问时代", d.nextQuestion.value!!.contains("时代"))
+        assertTrue("剧本长度≥100", d.brief.value.rawScript.length >= 100)
+    }
+
+    @Test
+    fun `完整5问流程推进到 ANSWERED`() {
+        val d = fresh()
+        d.start()
+        d.onAnswer(BriefField.SCRIPT, longScript)
+        d.onAnswer(BriefField.ERA, "东汉")
+        d.onAnswer(BriefField.STYLE, "cinematic")
+        d.onAnswer(BriefField.CHARACTER_COUNT, "4")
+        d.onAnswer(BriefField.MOOD, "史诗")
+        assertEquals(BriefState.ANSWERED, d.state.value)
+        assertNull(d.nextQuestion.value)
+        val b = d.brief.value
+        assertEquals("东汉", b.era)
+        assertEquals("cinematic", b.style)
+        assertEquals(4, b.characterCount)
+        assertEquals("史诗", b.mood)
+        assertTrue(b.isComplete())
+    }
+
+    @Test
+    fun `用户自由补充进入 customNotes`() {
+        val d = fresh()
+        d.start()
+        d.onUserNote("男主是哑巴，关键情节用手语")
+        assertTrue("补充进 customNotes", d.brief.value.customNotes.contains("手语"))
+        // 历史里能看到用户补充 turn
+        assertTrue(d.history.value.any { it.side == DialogueTurn.Side.USER && it.content.contains("手语") })
+    }
+
+    @Test
+    fun `回答后不再重复问已填字段`() {
+        val d = fresh()
+        d.start()
+        d.onAnswer(BriefField.ERA, "唐")
+        // 下一个问题不应再含「时代」
+        assertFalse("不再问时代", d.nextQuestion.value!!.contains("时代"))
+        assertTrue("转问风格", d.nextQuestion.value!!.contains("风格"))
+    }
+
+    @Test
+    fun `confirm 进入 CONFIRMED`() {
+        val d = fresh()
+        d.start()
+        d.onAnswer(BriefField.ERA, "明")
+        d.onAnswer(BriefField.STYLE, "noir")
+        d.onAnswer(BriefField.CHARACTER_COUNT, "3")
+        d.onAnswer(BriefField.MOOD, "悬疑")
+        d.requestConfirm()
+        assertEquals(BriefState.CONFIRMING, d.state.value)
+        d.confirm()
+        assertEquals(BriefState.CONFIRMED, d.state.value)
+        assertTrue(d.brief.value.confirmed)
+        assertTrue(d.brief.value.isFullyConfirmed())
+    }
+
+    @Test
+    fun `cancel 随时可中断`() {
+        val d = fresh()
+        d.start()
+        d.onAnswer(BriefField.ERA, "现代")
+        d.cancel()
+        assertEquals(BriefState.CANCELLED, d.state.value)
+        assertNull(d.nextQuestion.value)
+    }
+
+    @Test
+    fun `超过 maxRounds 自动结束问询`() {
+        val d = BriefDialogue(maxRounds = 2, nowMs = { 0L })
+        d.start()
+        d.onAnswer(BriefField.ERA, "架空")
+        // 第二轮问风格，回答后 round>=2 → 直接 ANSWERED
+        d.onAnswer(BriefField.STYLE, "anime")
+        assertEquals(BriefState.ANSWERED, d.state.value)
+        assertNull(d.nextQuestion.value)
+    }
+
+    @Test
+    fun `renderSummary 含所有字段`() {
+        val b = Brief(era = "西汉", style = "cinematic", characterCount = 5, mood = "热血", withAudio = true, customNotes = "突出权谋")
+        val s = b.renderSummary()
+        assertTrue(s.contains("西汉"))
+        assertTrue(s.contains("cinematic"))
+        assertTrue(s.contains("5"))
+        assertTrue(s.contains("热血"))
+        assertTrue(s.contains("权谋"))
+    }
+
+    @Test
+    fun `toPromptFragment 折叠格式正确`() {
+        val b = Brief(era = "唐", style = "水墨", characterCount = 2, mood = "治愈", withAudio = false)
+        val f = b.toPromptFragment()
+        assertTrue(f.contains("时代=唐"))
+        assertTrue(f.contains("风格=水墨"))
+        assertTrue(f.contains("主要角色数=2"))
+        assertTrue(f.contains("配音=否"))
+    }
+
+    @Test
+    fun `editField 在确认阶段可改`() {
+        val d = fresh()
+        d.start()
+        d.onAnswer(BriefField.ERA, "宋")
+        d.onAnswer(BriefField.STYLE, "real")
+        d.onAnswer(BriefField.CHARACTER_COUNT, "3")
+        d.onAnswer(BriefField.MOOD, "日常")
+        d.requestConfirm()
+        d.editField(BriefField.ERA, "南宋")
+        assertEquals("南宋", d.brief.value.era)
+    }
+
+    @Test
+    fun `editField 在非确认阶段无效`() {
+        val d = fresh()
+        d.start()
+        d.onAnswer(BriefField.ERA, "宋")
+        d.editField(BriefField.ERA, "南宋")  // 此时还在 QUESTIONING，应被忽略
+        assertEquals("宋", d.brief.value.era)
+    }
+}
