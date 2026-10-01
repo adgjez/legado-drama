@@ -33,18 +33,27 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.legado.drama.AppGraph
 import com.legado.drama.R
+import com.legado.drama.assistant.AppActionExecutor
+import com.legado.drama.engine.orchestrate.ActionContext
+import com.legado.drama.engine.orchestrate.StreamChunk
+import com.legado.drama.engine.orchestrate.StreamingAssistant
 import com.legado.drama.ui.theme.DramaGradients
 import com.legado.drama.ui.theme.DramaNeon
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 
 /** AI 面板内一条消息（role: "ai" / "user"） */
 private data class AiMsg(val role: String, val text: String)
@@ -108,7 +117,7 @@ fun AiAssistantFloating(onClick: () -> Unit) {
  * 输入框复用 OutlinedTextField，发送按钮 40dp 圆 GradAI。
  */
 @Composable
-fun AiAssistantPanel(onDismiss: () -> Unit) {
+fun AiAssistantPanel(graph: AppGraph, onDismiss: () -> Unit) {
     val greeting = stringResource(R.string.ai_greeting)
     val intro = stringResource(R.string.ai_intro)
     val replyText = stringResource(R.string.ai_reply)
@@ -121,6 +130,34 @@ fun AiAssistantPanel(onDismiss: () -> Unit) {
         )
     }
     var input by remember { mutableStateOf("") }
+    // 流式对话：assistant 由 TextModelRouter 注入（非阻塞：LaunchedEffect 里异步 resolve）
+    var assistant by remember { mutableStateOf<StreamingAssistant?>(null) }
+    var bootError by remember { mutableStateOf<String?>(null) }
+    var streaming by remember { mutableStateOf<String?>(null) }   // 当前正在流式的 AI 回复
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    // 异步接入模型：activeTextModelId 无 Key 时 resolve 抛错 → 面板内提示，不阻塞 UI
+    LaunchedEffect(Unit) {
+        val modelId = graph.textRouter.activeTextModelId()
+        runCatching { graph.textRouter.resolve(modelId) }
+            .onSuccess { provider ->
+                assistant = StreamingAssistant(
+                    textProvider = provider,
+                    modelId = modelId,
+                    envelopeHandler = { env -> AppActionExecutor(graph).execute(env) },
+                    actionContext = ActionContext(),
+                    contextFactory = {
+                        // 跨轮自动复用 App 当前选中项目：AI 说“接着写剧本”时 set_script 直接作用于该项目
+                        val pid = graph.activeProjectId()
+                        ActionContext(projectId = pid.ifBlank { null })
+                    },
+                    idempotencyStore = null, // 进程内 SharedActionIdempotency + ActionContext 去重
+                    logger = { android.util.Log.d("AiAssistant", it) },
+                )
+            }
+            .onFailure { e -> bootError = "文本模型未就绪：${e.message?.take(80) ?: e.javaClass.simpleName}" }
+    }
 
     Column(
         modifier = Modifier
@@ -142,7 +179,7 @@ fun AiAssistantPanel(onDismiss: () -> Unit) {
             Box(
                 modifier = Modifier
                     .size(8.dp)
-                    .background(DramaNeon.NeonGreen, CircleShape),
+                    .background(if (assistant != null) DramaNeon.NeonGreen else DramaNeon.NeonMagenta, CircleShape),
             )
             Spacer(Modifier.width(8.dp))
             Text(
@@ -154,12 +191,21 @@ fun AiAssistantPanel(onDismiss: () -> Unit) {
                 Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.ai_close), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        // 消息流
+        if (bootError != null) {
+            Text(
+                text = bootError.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+        // 消息流（含流式中的 AI 气泡）
+        val displayMessages = if (streaming != null) messages + AiMsg("ai", streaming.orEmpty()) else messages
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
         ) {
-            items(messages) { msg ->
+            items(displayMessages) { msg ->
                 if (msg.role == "user") {
                     // 用户气泡：GradHero 渐变、右对齐
                     Box(
@@ -214,12 +260,32 @@ fun AiAssistantPanel(onDismiss: () -> Unit) {
                         spotColor = DramaNeon.GlowShadow,
                     )
                     .background(DramaGradients.Ai, CircleShape)
-                    .clickable(enabled = input.isNotBlank()) {
-                        if (input.isNotBlank()) {
-                            messages = messages + AiMsg("user", input.trim())
+                    .clickable(enabled = input.isNotBlank() && !busy) {
+                        val text = input.trim()
+                        if (text.isNotBlank() && !busy) {
                             input = ""
-                            // 本地轻量回应（不引入实时 LLM 依赖；规格只约束交互形态）
-                            messages = messages + AiMsg("ai", replyText)
+                            messages = messages + AiMsg("user", text)
+                            val asst = assistant
+                            if (asst == null) {
+                                messages = messages + AiMsg("ai", bootError ?: replyText)
+                            } else {
+                                busy = true
+                                streaming = ""
+                                scope.launch {
+                                    asst.sayStreaming(text).collect { chunk ->
+                                        when (chunk) {
+                                            is StreamChunk.TextDelta -> streaming = (streaming.orEmpty()) + chunk.text
+                                            is StreamChunk.ActionComplete -> streaming = (streaming.orEmpty()) + "\n[执行] ${chunk.verb}: ${chunk.message}"
+                                            is StreamChunk.Done -> {
+                                                val full = chunk.fullText.ifBlank { streaming.orEmpty() }
+                                                messages = messages + AiMsg("ai", full)
+                                                streaming = null
+                                                busy = false
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     },
             ) {

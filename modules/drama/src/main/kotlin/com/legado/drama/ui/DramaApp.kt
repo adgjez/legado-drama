@@ -198,7 +198,7 @@ fun DramaApp() {
     }
     // AI 聊天面板（全屏覆盖，不占 NavigationBar）
     if (aiPanelOpen) {
-        AiAssistantPanel(onDismiss = { aiPanelOpen = false })
+        AiAssistantPanel(graph = graph, onDismiss = { aiPanelOpen = false })
     }
 }
 

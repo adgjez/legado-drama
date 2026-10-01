@@ -267,6 +267,9 @@ class AppGraph private constructor(context: Context) {
         }
     }
 
+    /** 当前选中的项目 id（空串表示未选中）；供 AI 助手动作上下文注入。 */
+    fun activeProjectId(): String = activeProjectId
+
     private fun assetIdsInProject(): Set<String> = assetIdsCache
 
     companion object {
