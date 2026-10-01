@@ -283,7 +283,7 @@ room = { id = "androidx.room", version.ref = "room" }
 # ✅Hilt插件，这里key名字必须叫 hilt，id固定
 hilt = { id = "dagger.hilt.android.plugin", version.ref = "hilt" }
 
-download = { id = "de.undercouch.download", version = "5.6.0" }
+download = { id = "de.undercouch.download", version = "5.7.0" }
 
 # Kotlin 代码格式检查（spotless + ktlint），见根 build.gradle 与 docs/project-rules/build-commands.md
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
