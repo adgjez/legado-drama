@@ -61,6 +61,10 @@ interface AssetDao {
 
     @Query("UPDATE assets SET reference_image_uri = :uri, updated_at = :updatedAt WHERE asset_id = :assetId")
     suspend fun setReferenceImage(assetId: String, uri: String?, updatedAt: Long)
+
+    /** remove_asset 动作：删除主卡及其 6pose 派生行（parent_id 指向主卡） */
+    @Query("DELETE FROM assets WHERE asset_id = :assetId OR parent_id = :assetId")
+    suspend fun deleteWithDerived(assetId: String)
 }
 
 /** 剧集 */

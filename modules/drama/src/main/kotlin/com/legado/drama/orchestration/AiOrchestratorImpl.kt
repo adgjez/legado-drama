@@ -214,7 +214,7 @@ class DefaultAiOrchestrator(
                 val uri = graph.agnesProvider.generateImage(
                     ImageGenRequest(
                         prompt = buildImagePrompt(asset),
-                        negativePrompt = sessionEra.eraNegative, // 时代红线负向（F3：现代剧禁古装/古代剧禁现代物）
+                        negativePrompt = graph.providerPrefs.crossEraNegative(sessionEra.eraNegative), // 时代红线负向（可被 set_cross_era 豁免）
                         width = 1024,
                         height = 1024,
                         referenceUri = asset.referenceImageUri, // 图生图参考图（i2i）——资产挂参考图时作为 input_image 传入
@@ -277,7 +277,7 @@ class DefaultAiOrchestrator(
                     graph.agnesProvider.generateImage(
                         ImageGenRequest(
                             prompt = buildImagePrompt(asset),
-                            negativePrompt = sessionEra.eraNegative,
+                            negativePrompt = graph.providerPrefs.crossEraNegative(sessionEra.eraNegative), // G2 重试同样带参考图（i2i）
                             width = 1024,
                             height = 1024,
                             referenceUri = asset.referenceImageUri, // G2 重试同样带参考图（i2i）

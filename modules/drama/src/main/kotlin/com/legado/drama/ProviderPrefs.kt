@@ -47,6 +47,18 @@ class ProviderPrefs(context: Context) {
         get() = sp.getString(KEY_ACTIVE_VIDEO_PROVIDER, "agnes") ?: "agnes"
         set(value) = sp.edit().putString(KEY_ACTIVE_VIDEO_PROVIDER, value).apply()
 
+    /** set_cross_era 动作：跨时代器物豁免列表（逗号分隔，如 "手机,眼镜,手表"）。持久化到设置，图像负向词据此剔除。 */
+    var crossEraAllowed: String
+        get() = sp.getString(KEY_CROSS_ERA_ALLOWED, "") ?: ""
+        set(value) = sp.edit().putString(KEY_CROSS_ERA_ALLOWED, value).apply()
+
+    /** 从负向词串中剔除已豁免的跨时代器物（set_cross_era 真实生效点：生成/审计负向 prompt 传入前调用） */
+    fun crossEraNegative(base: String): String {
+        val allowed = crossEraAllowed.split(",").map { it.trim() }.filter { it.isNotBlank() }.toSet()
+        if (allowed.isEmpty()) return base
+        return base.split(",").map { it.trim() }.filter { it.isNotBlank() && it !in allowed }.joinToString(", ")
+    }
+
     companion object {
         const val KEY_VIDEO_INTERVAL = "video_interval_ms"
         const val KEY_AGNES_BASE = "agnes_base_url"
@@ -54,6 +66,7 @@ class ProviderPrefs(context: Context) {
         const val KEY_LAST_MODE = "last_mode"
         const val KEY_ACTIVE_TEXT_MODEL = "active_text_model"
         const val KEY_ACTIVE_VIDEO_PROVIDER = "active_video_provider"
+        const val KEY_CROSS_ERA_ALLOWED = "cross_era_allowed"
 
         /** Agnes 直连基址（S1 实测通过；决策 Q1 解除代理层） */
         const val DEFAULT_AGNES_BASE = "https://apihub.agnes-ai.com"
