@@ -73,6 +73,16 @@ interface AiOrchestrator {
         onAutoCreatedProject: (projectId: String, episodeId: String) -> Unit = { _, _ -> },
     )
 
+    /**
+     * 协作式取消请求（供 stop_generate 等动作接线）。
+     * 语义：仅对【当前正在运行】的 run 生效——置位后，批量生成循环（阶段②逐卡生成、
+     * 阶段③审计重生成）在下一个卡边界停止，已生成的资产与数据保留，流水线以
+     * 「用户中止」结束（不抛 AiError、不计失败）；若当前无运行中的流水线则返回 false，
+     * 调用方据此给出「无需停止」的如实反馈，不伪造取消。
+     * @return true=已受理（有运行中流水线且将停止）；false=当前无运行中流水线
+     */
+    fun requestCancel(): Boolean
+
     /** 重试某一阶段：已完成阶段结果不重复调用，仅从 fromStage 起重新跑 */
     suspend fun retryFrom(fromStage: PipelineStage5)
 

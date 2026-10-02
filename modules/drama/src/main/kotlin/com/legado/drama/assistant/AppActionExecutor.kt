@@ -331,10 +331,11 @@ class AppActionExecutor(
     }
 
     /**
-     * stop_generate：停止生成单张资产图像。
-     * 真实能力核查：AiOrchestrator / PipelineOrchestrator / RenderQueue 均无生成任务句柄，
-     * 端侧资产生成是同步网络请求（generateImage 一行一图，无在途任务可取消），
-     * 因此无法真实中断——fail-closed 返回明确诊断，不伪造成功。
+     * stop_generate：停止批量生成（协作式取消）。
+     * 真实能力核查：端侧同步单卡 generate 无法中断在途请求；但五阶段流水线的
+     * 逐卡生成（AiOrchestrator 阶段②③）支持协作式取消——requestCancel() 置位后
+     * 在下个卡边界停止，已生成资产与进度保留，流水线以 WARN 结束（不抛 AiError）。
+     * 有运行中流水线 → 返回 ok；无运行中 → 如实返回 ok 并说明无需停止（不伪造取消）。
      */
     private suspend fun stopGenerate(env: ActionEnvelope): ActionResult {
         val assetId = env.args["assetId"]?.trim().orEmpty()
@@ -348,12 +349,21 @@ class AppActionExecutor(
             "rejected" -> "生成失败（rejected）"
             else -> "尚未生成（none）"
         }
-        return fail(
-            env,
-            "无法停止：端侧资产生成是同步请求，无在途任务可取消（该资产 $stateDesc）。" +
-                "如需重新生成用 generate，删除用 remove_asset，暂停渲染用 render_pause",
-            "NOT_STOPPABLE",
-        )
+        return if (graph.aiOrchestrator.requestCancel()) {
+            ok(
+                env,
+                "已请求停止生成：正在生成的当前卡完成后将中止后续批量生成，" +
+                    "已生成资产与进度保留（该资产 $stateDesc）",
+                listOf(assetId),
+            )
+        } else {
+            ok(
+                env,
+                "当前没有运行中的批量生成任务，无需停止（该资产 $stateDesc）；" +
+                    "如需重新生成用 generate，删除用 remove_asset，暂停渲染用 render_pause",
+                emptyList(),
+            )
+        }
     }
 
     /** edit_asset：直接改写资产 prompt（保留关心字段，触发重新生成） */

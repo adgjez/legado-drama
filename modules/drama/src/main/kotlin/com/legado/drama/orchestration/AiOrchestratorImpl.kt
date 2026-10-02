@@ -39,6 +39,8 @@ import java.util.UUID
  * 5. 审计：G2 语义重试 2 次仍差 → 标红放行（决议 Q3）
  * 6. 分镜：文本通道结构化输出 → 资产名→ID 绑定首尾帧 → 六铁律复核落报告
  * 7. 文本模型：textModelId 非空路由；Key 空/未验证 → ModelBlocked 阻断（P1-1 验收 4）
+ * 8. 协作式取消：requestCancel 置位后，阶段②逐卡/阶段③审计重生成在下个卡边界抛
+ *    PipelineCancelled，run 以 WARN 事件正常结束（不抛 AiError）；已生成资产与进度保留。
  */
 class DefaultAiOrchestrator(
     private val graph: AppGraph,
@@ -57,8 +59,21 @@ class DefaultAiOrchestrator(
     @Volatile private var running = false
     @Volatile private var sessionTextModelId: String = DeepSeekDefaults.MODEL
 
+    /** 协作式取消标志（stop_generate 置位；仅在下一个生成卡边界检查，同步请求不可中途掐断） */
+    @Volatile private var cancelRequested = false
+
     /** 本会话推断出的时代预设（P0-FIX F3：AI 模式自动断代，不再写死西汉） */
     @Volatile private var sessionEra: StylePreset = StylePresets.MODERN
+
+    override fun requestCancel(): Boolean {
+        if (!running) return false
+        cancelRequested = true
+        return true
+    }
+
+    private fun checkCancelled() {
+        if (cancelRequested) throw PipelineCancelled
+    }
 
     override suspend fun run(
         scriptText: String,
@@ -74,6 +89,7 @@ class DefaultAiOrchestrator(
             throw AiError.InputTooShort("剧本需 ≥$MIN_SCRIPT_LENGTH 字（实测调用方已校验，此为兜底）")
         }
         running = true
+        cancelRequested = false // 新一轮流水线重置取消标志
         stageStartMs = System.currentTimeMillis()
         try {
             // 前置：文本模型 Key 校验，空则阻断（P1-1 验收 4：提示而非静默失败）
@@ -99,6 +115,13 @@ class DefaultAiOrchestrator(
             onEnqueueRender(episodeId)
             emit(PipelineStage5.ENQUEUE_RENDER, 0, "已入队渲染（断点续传覆盖）", ProgressEvent.Level.INFO)
             emit(PipelineStage5.ENQUEUE_RENDER_DONE, 0, "流水线完成", ProgressEvent.Level.INFO)
+        } catch (e: PipelineCancelled) {
+            // 用户通过 stop_generate 协作式取消：以 WARN 事件留痕、流水线正常结束，不算法失败
+            emit(
+                currentStageOr(PipelineStage5.GENERATE_IMAGES), 0,
+                "已按请求停止生成，流水线中止；已生成的资产与进度保留",
+                ProgressEvent.Level.WARN,
+            )
         } catch (e: AiError) {
             // 输入/模型阻断类错误：事件留痕后上抛给调用方（UI 提示）
             emit(
@@ -209,6 +232,7 @@ class DefaultAiOrchestrator(
         var okCount = 0
         var failCount = 0
         assets.forEachIndexed { idx, asset ->
+            checkCancelled() // stop_generate 协作式取消：在当前卡边界停止，已生成成果保留
             val label = asset.prompt.take(12)
             val updated = try {
                 val uri = graph.agnesProvider.generateImage(
@@ -273,6 +297,7 @@ class DefaultAiOrchestrator(
             emit(PipelineStage5.AUDIT, attempt, "第 $attempt 次审计发现 ${bad.size} 张未过 G1，重生成中…")
             auditOk = false
             bad.forEach { asset ->
+                checkCancelled() // 审计重生成同样可被 stop_generate 中止
                 runCatching {
                     graph.agnesProvider.generateImage(
                         ImageGenRequest(
@@ -504,6 +529,9 @@ $scriptText
         const val MIN_SCRIPT_LENGTH = 100
         const val DEFAULT_BUDGET_SHOTS = 50
         const val MAX_AUDIT_RETRY = 2 // 决议 Q3
+
+        /** 用户协作式取消信号（stop_generate→requestCancel→checkCancelled 抛出，run 捕获后以 WARN 结束） */
+        private object PipelineCancelled : Exception("pipeline cancelled by user")
 
         /** 角色 6 pose 包（架构文档 §5 assets 表 pose_role 枚举） */
         val POSE_ROLES = listOf("front_anchor", "side_45", "side_90", "back", "low_angle", "high_angle")
