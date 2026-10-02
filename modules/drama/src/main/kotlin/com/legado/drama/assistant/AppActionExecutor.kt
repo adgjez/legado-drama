@@ -52,9 +52,10 @@ class AppActionExecutor(
         "list_assets" -> listAssets(env)
         "model_status" -> modelStatus(env)
         "render_status" -> renderStatus(env)
-        // 资产级：提取 / 生成 / 编辑 / 删除 / 改类 / 审查 / 姿态包
+        // 资产级：提取 / 生成 / 停止生成 / 编辑 / 删除 / 改类 / 审查 / 姿态包
         "extract_assets" -> extractAssets(env)
         "generate" -> generateAsset(env)
+        "stop_generate" -> stopGenerate(env)
         "edit_asset" -> editAsset(env)
         "remove_asset" -> removeAsset(env)
         "change_asset_kind" -> changeAssetKind(env)
@@ -327,6 +328,32 @@ class AppActionExecutor(
             )
             fail(env, "图像生成失败：${e.message}", "GENERATE_FAILED")
         }
+    }
+
+    /**
+     * stop_generate：停止生成单张资产图像。
+     * 真实能力核查：AiOrchestrator / PipelineOrchestrator / RenderQueue 均无生成任务句柄，
+     * 端侧资产生成是同步网络请求（generateImage 一行一图，无在途任务可取消），
+     * 因此无法真实中断——fail-closed 返回明确诊断，不伪造成功。
+     */
+    private suspend fun stopGenerate(env: ActionEnvelope): ActionResult {
+        val assetId = env.args["assetId"]?.trim().orEmpty()
+        if (assetId.isBlank()) {
+            return fail(env, "缺少资产 id（assetId）", "INVALID_ARGUMENTS")
+        }
+        val asset = graph.db.assetDao().get(assetId)
+            ?: return fail(env, "资产不存在：$assetId", "ASSET_NOT_FOUND")
+        val stateDesc = when (asset.g1State) {
+            "pass" -> "已生成完成"
+            "rejected" -> "生成失败（rejected）"
+            else -> "尚未生成（none）"
+        }
+        return fail(
+            env,
+            "无法停止：端侧资产生成是同步请求，无在途任务可取消（该资产 $stateDesc）。" +
+                "如需重新生成用 generate，删除用 remove_asset，暂停渲染用 render_pause",
+            "NOT_STOPPABLE",
+        )
     }
 
     /** edit_asset：直接改写资产 prompt（保留关心字段，触发重新生成） */
