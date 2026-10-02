@@ -117,7 +117,7 @@ fun AiAssistantFloating(onClick: () -> Unit) {
  * 输入框复用 OutlinedTextField，发送按钮 40dp 圆 GradAI。
  */
 @Composable
-fun AiAssistantPanel(graph: AppGraph, onDismiss: () -> Unit) {
+fun AiAssistantPanel(graph: AppGraph, onDismiss: () -> Unit, onNavigate: ((Page) -> Unit)? = null) {
     val greeting = stringResource(R.string.ai_greeting)
     val intro = stringResource(R.string.ai_intro)
     val replyText = stringResource(R.string.ai_reply)
@@ -145,7 +145,7 @@ fun AiAssistantPanel(graph: AppGraph, onDismiss: () -> Unit) {
                 assistant = StreamingAssistant(
                     textProvider = provider,
                     modelId = modelId,
-                    envelopeHandler = { env -> AppActionExecutor(graph).execute(env) },
+                    envelopeHandler = { env -> AppActionExecutor(graph, onNavigate).execute(env) },
                     actionContext = ActionContext(),
                     contextFactory = {
                         // 跨轮自动复用 App 当前选中项目：AI 说“接着写剧本”时 set_script 直接作用于该项目

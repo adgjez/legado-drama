@@ -198,7 +198,11 @@ fun DramaApp() {
     }
     // AI 聊天面板（全屏覆盖，不占 NavigationBar）
     if (aiPanelOpen) {
-        AiAssistantPanel(graph = graph, onDismiss = { aiPanelOpen = false })
+        AiAssistantPanel(
+            graph = graph,
+            onDismiss = { aiPanelOpen = false },
+            onNavigate = { target -> page = target.ownerMain },
+        )
     }
 }
 
