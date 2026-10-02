@@ -160,6 +160,7 @@ private fun validationError(intent: ActionIntent, context: ActionContext): Strin
         "test_drama" -> if (p("script").isNullOrBlank() && p("text").isNullOrBlank()) "script" else null
         "open_project" -> if (p("id").isNullOrBlank()) "id" else null
         "generate" -> if (p("assetId").isNullOrBlank()) "assetId" else null
+        "stop_generate" -> if (p("assetId").isNullOrBlank()) "assetId" else null
         "edit_asset" ->
             if (p("assetId").isNullOrBlank()) "assetId"
             else if (p("prompt").isNullOrBlank()) "prompt"

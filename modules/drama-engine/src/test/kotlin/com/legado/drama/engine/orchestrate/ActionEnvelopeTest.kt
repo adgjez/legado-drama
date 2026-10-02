@@ -86,6 +86,25 @@ class ActionEnvelopeTest {
     }
 
     @Test
+    fun `stop_generate 缺 assetId 时 fail-closed`() {
+        val act = ActionIntent("stop_generate", mapOf()) // 缺 assetId
+        val decoded = decodeEnvelope(act, ActionContext(projectId = "p_1"))
+        val rejected = rejectedAction(decoded)
+        assertEquals("INVALID_ARGUMENTS", rejected.result.errorCode)
+        assertTrue(rejected.result.message.contains("assetId"))
+    }
+
+    @Test
+    fun `stop_generate 携带 assetId 时解码为合法信封`() {
+        val act = ActionIntent("stop_generate", mapOf("assetId" to "char_001"))
+        val decoded = decodeEnvelope(act, ActionContext(projectId = "p_1"))
+        val ok = okAction(decoded)
+        assertEquals("stop_generate", ok.envelope.verb)
+        assertEquals("char_001", ok.envelope.args["assetId"])
+        assertEquals("p_1", ok.envelope.projectId)
+    }
+
+    @Test
     fun `set_script 兼容 text 或 script 别名`() {
         val viaText = decodeEnvelope(ActionIntent("set_script", mapOf("text" to "剧本")), ActionContext(projectId = "p_1"))
         val viaScript = decodeEnvelope(ActionIntent("set_script", mapOf("script" to "剧本")), ActionContext(projectId = "p_1"))
