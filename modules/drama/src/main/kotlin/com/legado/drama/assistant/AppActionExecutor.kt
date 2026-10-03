@@ -575,8 +575,14 @@ class AppActionExecutor(
         }
         val episode = graph.db.episodeDao().get(episodeId)
             ?: return fail(env, "剧集不存在：$episodeId", "EPISODE_NOT_FOUND")
-        val tasks = graph.db.renderTaskDao().listByEpisode(episodeId)
-        val clips = tasks
+        // ★ 顺序契约：组装要求按 shot_no 升序。render_tasks.shot_id 是 UUID 主键，
+        // 直接按该列排序与分镜顺序无关，必须以 shots 表（ORDER BY shot_no）为基准，
+        // 按 shotId 映射提取已完成片段，否则成片镜头顺序错乱。
+        val shots = graph.db.shotDao().listByEpisode(episodeId)
+        val tasksByShot = graph.db.renderTaskDao().listByEpisode(episodeId)
+            .associateBy { it.shotId }
+        val clips = shots
+            .mapNotNull { tasksByShot[it.shotId] }
             .filter { it.state == "COMPLETED" && !it.localFileUri.isNullOrBlank() }
             .mapNotNull { File(it.localFileUri!!).takeIf { f -> f.exists() && f.length() > 0 } }
         if (clips.isEmpty()) {
