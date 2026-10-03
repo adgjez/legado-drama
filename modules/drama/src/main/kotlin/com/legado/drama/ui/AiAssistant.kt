@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -248,6 +249,36 @@ fun AiAssistantPanel(graph: AppGraph, onDismiss: () -> Unit, onNavigate: ((Page)
                 placeholder = { Text(stringResource(R.string.ai_placeholder), style = MaterialTheme.typography.bodyMedium) },
                 shape = RoundedCornerShape(12.dp),
             )
+            Spacer(Modifier.width(10.dp))
+            // 停止生成：显式协作式取消按钮（等价 [ACT] stop_generate，
+            // 直连引擎 requestCancel——与 AppActionExecutor.stopGenerate 共用同一取消机制）
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape)
+                    .border(
+                        androidx.compose.foundation.BorderStroke(1.dp, DramaNeon.NeonMagenta.copy(alpha = 0.45f)),
+                        CircleShape,
+                    )
+                    .clickable {
+                        val accepted = graph.aiOrchestrator.requestCancel()
+                        messages = messages + AiMsg(
+                            "ai",
+                            if (accepted) {
+                                "已请求停止生成：正在生成的当前卡完成后将中止后续批量生成，已生成资产与进度保留。"
+                            } else {
+                                "当前没有运行中的批量生成任务，无需停止；如需重新生成请下达 generate。"
+                            },
+                        )
+                    },
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Stop,
+                    contentDescription = stringResource(R.string.ai_stop),
+                    tint = DramaNeon.NeonMagenta,
+                )
+            }
             Spacer(Modifier.width(10.dp))
             Box(
                 contentAlignment = Alignment.Center,
