@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -404,6 +405,58 @@ fun LibraryPage(graph: AppGraph) {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.outline,
                             )
+                            // 分段成片（SEGMENTED）：解析 partsUrisJson 展示分段列表，点击分段行预览对应分段文件
+                            if (f.strategy == MovieAssembler.Strategy.SEGMENTED.name) {
+                                val parts = remember(f.partsUrisJson) { decodeParts(f.partsUrisJson) }
+                                if (parts.isNotEmpty()) {
+                                    var segmentsExpanded by remember(f.filmId) { mutableStateOf(false) }
+                                    TextButton(onClick = { segmentsExpanded = !segmentsExpanded }) {
+                                        Text(
+                                            stringResource(
+                                                if (segmentsExpanded) R.string.library_segments_collapse
+                                                else R.string.library_segments_expand,
+                                                parts.size,
+                                            ),
+                                            style = MaterialTheme.typography.labelMedium,
+                                        )
+                                    }
+                                    if (segmentsExpanded) {
+                                        parts.forEachIndexed { index, path ->
+                                            val file = File(path)
+                                            Row(
+                                                Modifier.fillMaxWidth()
+                                                    .clickable { playVideoFile(graph, file) }
+                                                    .padding(vertical = 4.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                Text(
+                                                    stringResource(
+                                                        R.string.library_segment_row,
+                                                        index + 1,
+                                                        file.name,
+                                                        if (file.exists() && file.length() > 0) file.length() / 1024 else 0,
+                                                    ),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = if (file.exists() && file.length() > 0) {
+                                                        MaterialTheme.colorScheme.onSurface
+                                                    } else {
+                                                        MaterialTheme.colorScheme.outline
+                                                    },
+                                                )
+                                                Text(
+                                                    stringResource(
+                                                        if (file.exists() && file.length() > 0) R.string.library_segment_preview_ready
+                                                        else R.string.library_segment_preview_missing,
+                                                    ),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(onClick = { playFilm(graph, f) }) { Text(stringResource(R.string.library_play_btn)) }
                                 OutlinedButton(onClick = { shareFilm(graph, f) }) { Text(stringResource(R.string.library_share_btn)) }
@@ -440,7 +493,11 @@ fun LibraryPage(graph: AppGraph) {
 
 /** 播放成片：FileProvider + ACTION_VIEW（外部播放器） */
 private fun playFilm(graph: AppGraph, f: FinishedFilmEntity) {
-    val file = File(f.fileUri)
+    playVideoFile(graph, File(f.fileUri))
+}
+
+/** 播放本地视频文件：FileProvider + ACTION_VIEW（供成片与分段共用） */
+private fun playVideoFile(graph: AppGraph, file: File) {
     if (!file.exists() || file.length() <= 0) return
     val context = graph.appContext
     val uri = FileProvider.getUriForFile(context, context.packageName + ".fileProvider", file)
@@ -450,6 +507,11 @@ private fun playFilm(graph: AppGraph, f: FinishedFilmEntity) {
     }
     context.startActivity(intent)
 }
+
+/** 解析 partsUrisJson（List<String> 绝对路径），解析失败回退空列表 */
+private fun decodeParts(json: String): List<String> = runCatching {
+    Json.decodeFromString<List<String>>(json)
+}.getOrDefault(emptyList())
 
 /** 分享成片：FileProvider + ACTION_SEND */
 private fun shareFilm(graph: AppGraph, f: FinishedFilmEntity) {

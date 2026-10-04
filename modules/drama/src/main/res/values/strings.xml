@@ -88,6 +88,11 @@
     <string name="library_delete_text">确定删除 %1$s… 吗？此操作不可恢复。</string>
     <string name="library_deleted">成片已删除</string>
     <string name="library_share_chooser">分享成片</string>
+    <string name="library_segments_expand">查看分段（%1$d）</string>
+    <string name="library_segments_collapse">收起分段</string>
+    <string name="library_segment_row">分段 %1$d · %2$s · %3$dKB</string>
+    <string name="library_segment_preview_ready">预览</string>
+    <string name="library_segment_preview_missing">文件缺失</string>
 
     <!-- ============ 设置页 (DramaScreens SettingsPage) ============ -->
     <string name="settings_title">设置</string>
