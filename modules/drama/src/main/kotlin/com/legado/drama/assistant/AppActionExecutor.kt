@@ -612,7 +612,24 @@ class AppActionExecutor(
                 ok(env, "成片合成完成（${result.strategy.label}，${result.durationSeconds}s）", listOf(result.output.absolutePath))
             }
             is MovieAssembler.AssembleResult.Segmented -> {
-                ok(env, "分段导出完成（${result.parts.size} 段，每段一个 mp4）", result.parts.map { it.absolutePath })
+                // 分段成片同样落库：主键 filmId=episodeId（与成功分支同键，后一次覆盖前一次）；
+                // fileUri 指向第一段（可播可分享），partsUrisJson 记录全部分段路径，size 为各段总和。
+                graph.db.finishedFilmDao().upsert(
+                    FinishedFilmEntity(
+                        filmId = episodeId,
+                        episodeId = episodeId,
+                        projectId = episode.projectId,
+                        fileUri = result.parts.first().absolutePath,
+                        fileSize = result.parts.sumOf { it.length() },
+                        durationSeconds = result.durationSeconds,
+                        strategy = MovieAssembler.Strategy.SEGMENTED.name,
+                        partsUrisJson = Json.encodeToString(result.parts.map { it.absolutePath }),
+                        colorGrade = "CINEMA",
+                        assembledAt = System.currentTimeMillis(),
+                        updatedAt = System.currentTimeMillis(),
+                    ),
+                )
+                ok(env, "分段导出完成（${result.parts.size} 段，已写入影片库）", result.parts.map { it.absolutePath })
             }
             is MovieAssembler.AssembleResult.Failure -> {
                 fail(env, "成片合成失败：${result.message}", "ASSEMBLE_FAILED")

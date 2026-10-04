@@ -77,6 +77,7 @@ class Media3MovieAssembler(
             return MovieAssembler.AssembleResult.Segmented(
                 parts = parts,
                 elapsedMs = System.currentTimeMillis() - startMs,
+                durationSeconds = specs.sumOf { it.durationMs } / 1000.0,
             )
         }
 

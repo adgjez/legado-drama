@@ -65,6 +65,7 @@ import com.legado.drama.ui.components.statusErr
 import com.legado.drama.ui.components.statusInfo
 import com.legado.drama.ui.components.statusOk
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import java.io.File
 
 /**
@@ -346,6 +347,23 @@ fun LibraryPage(graph: AppGraph) {
                                             snackbar.show(context.getString(R.string.library_assemble_done, r.strategy.label))
                                         }
                                         is MovieAssembler.AssembleResult.Segmented -> {
+                                            // 分段成片同样落库（与执行器 compose_film 行为一致）：
+                                            // 主键 filmId=episodeId，fileUri 指向第一段，partsUrisJson 记录全部分段。
+                                            graph.db.finishedFilmDao().upsert(
+                                                FinishedFilmEntity(
+                                                    filmId = ep.episodeId,
+                                                    episodeId = ep.episodeId,
+                                                    projectId = project.projectId,
+                                                    fileUri = r.parts.first().absolutePath,
+                                                    fileSize = r.parts.sumOf { it.length() },
+                                                    durationSeconds = r.durationSeconds,
+                                                    strategy = MovieAssembler.Strategy.SEGMENTED.name,
+                                                    partsUrisJson = Json.encodeToString(r.parts.map { it.absolutePath }),
+                                                    colorGrade = "CINEMA",
+                                                    assembledAt = System.currentTimeMillis(),
+                                                    updatedAt = System.currentTimeMillis(),
+                                                ),
+                                            )
                                             snackbar.show(context.getString(R.string.library_assemble_segmented, r.parts.size))
                                         }
                                         is MovieAssembler.AssembleResult.Failure -> {

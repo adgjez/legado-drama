@@ -47,6 +47,7 @@ interface MovieAssembler {
         data class Segmented(
             val parts: List<File>,
             val elapsedMs: Long,
+            val durationSeconds: Double = 0.0,
         ) : AssembleResult()
 
         data class Failure(val strategy: Strategy, val message: String) : AssembleResult()
