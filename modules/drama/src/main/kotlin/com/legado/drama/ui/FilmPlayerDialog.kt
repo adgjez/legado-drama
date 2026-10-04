@@ -3,7 +3,6 @@ package com.legado.drama.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,10 +69,17 @@ fun FilmPlayerDialog(parts: List<String>, onDismiss: () -> Unit) {
             playWhenReady = true
         }
     }
+    // 保持关闭回调最新引用，避免 listener 闭包过期导致播放器无法关闭
+    val currentOnDismiss by rememberUpdatedState(onDismiss)
     val listener = remember {
         object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 currentIndex = player.currentMediaItemIndex
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                // 全部分段播完（含拖到末尾触发）→ 自动关闭回到成片库
+                if (playbackState == Player.STATE_ENDED) currentOnDismiss()
             }
         }
     }
