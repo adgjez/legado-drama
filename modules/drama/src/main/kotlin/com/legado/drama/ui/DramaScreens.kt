@@ -287,6 +287,7 @@ fun LibraryPage(graph: AppGraph) {
     val projects by graph.db.projectDao().observeAll().collectAsState(initial = emptyList())
     val project = projects.firstOrNull()
     var deleteTarget by remember { mutableStateOf<FinishedFilmEntity?>(null) }
+    var activePlayerParts by remember { mutableStateOf<List<String>?>(null) }
 
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         PageHeader(title = stringResource(R.string.library_title), subtitle = stringResource(R.string.library_subtitle))
@@ -458,7 +459,21 @@ fun LibraryPage(graph: AppGraph) {
                                 }
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = { playFilm(graph, f) }) { Text(stringResource(R.string.library_play_btn)) }
+                                if (f.strategy == MovieAssembler.Strategy.SEGMENTED.name) {
+                                    Button(onClick = {
+                                        val playable = decodeParts(f.partsUrisJson).filter { path ->
+                                            val file = File(path)
+                                            file.exists() && file.length() > 0
+                                        }
+                                        if (playable.isEmpty()) {
+                                            snackbar.show(context.getString(R.string.library_no_playable_parts))
+                                        } else {
+                                            activePlayerParts = playable
+                                        }
+                                    }) { Text(stringResource(R.string.library_play_all_btn)) }
+                                } else {
+                                    Button(onClick = { playFilm(graph, f) }) { Text(stringResource(R.string.library_play_btn)) }
+                                }
                                 OutlinedButton(onClick = { shareFilm(graph, f) }) { Text(stringResource(R.string.library_share_btn)) }
                                 OutlinedButton(onClick = { deleteTarget = f }) { Text(stringResource(R.string.library_delete_btn)) }
                             }
@@ -488,6 +503,10 @@ fun LibraryPage(graph: AppGraph) {
                 TextButton(onClick = { deleteTarget = null }) { Text(stringResource(R.string.common_cancel)) }
             },
         )
+    }
+
+    activePlayerParts?.let { parts ->
+        FilmPlayerDialog(parts = parts, onDismiss = { activePlayerParts = null })
     }
 }
 

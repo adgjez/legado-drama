@@ -93,6 +93,8 @@
     <string name="library_segment_row">分段 %1$d · %2$s · %3$dKB</string>
     <string name="library_segment_preview_ready">预览</string>
     <string name="library_segment_preview_missing">文件缺失</string>
+    <string name="library_play_all_btn">连续播放</string>
+    <string name="library_no_playable_parts">没有可播放的分段文件</string>
 
     <!-- ============ 设置页 (DramaScreens SettingsPage) ============ -->
     <string name="settings_title">设置</string>
